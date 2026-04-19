@@ -1,0 +1,23 @@
+:root {
+  --bg: #0F0D0A;
+  --surface: #1A1612;
+  --surface-2: #221C16;
+  --text: #F5EFE6;
+  --text-mute: #8C8478;
+  --text-faint: #5C544A;
+  --accent: #FF7A3D;
+  --accent-2: #FFB627;
+  --border: rgba(245, 239, 230, 0.08);
+  --border-strong: rgba(245, 239, 230, 0.14);
+  --border-accent: rgba(255, 122, 61, 0.3);
+
+  --font-display: 'Bricolage Grotesque', serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --maxw: 1280px;
+  --pad: clamp(20px, 4vw, 56px);
+}
