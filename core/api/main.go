@@ -22,6 +22,9 @@ import (
 //go:embed migrations/001_subscribers.sql
 var migrationSubscribers string
 
+//go:embed migrations/002_previews.sql
+var migrationPreviews string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -31,6 +34,7 @@ type subscribeReq struct {
 func main() {
 	dsn := mustEnv("DATABASE_URL")
 	allowedOrigin := mustEnv("ALLOWED_ORIGIN")
+	githubSecret := []byte(mustEnv("GITHUB_WEBHOOK_SECRET"))
 	port := getenv("PORT", "8080")
 
 	ctx := context.Background()
@@ -43,8 +47,10 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	if _, err := pool.Exec(ctx, migrationSubscribers); err != nil {
-		log.Fatalf("migration: %v", err)
+	for _, m := range []string{migrationSubscribers, migrationPreviews} {
+		if _, err := pool.Exec(ctx, m); err != nil {
+			log.Fatalf("migration: %v", err)
+		}
 	}
 
 	r := chi.NewRouter()
@@ -71,6 +77,8 @@ func main() {
 		r.Use(httprate.LimitByIP(60, time.Minute))
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
+
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret))
 
 	srv := &http.Server{
 		Addr:              ":" + port,

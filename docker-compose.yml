@@ -23,6 +23,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
       PORT: "8080"
     ports:
       - "127.0.0.1:8080:8080"
