@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import gsap from 'gsap'
 import EmailCapture from '../components/EmailCapture.jsx'
 import Marquee from '../components/Marquee.jsx'
@@ -6,6 +6,15 @@ import Marquee from '../components/Marquee.jsx'
 export default function Hero({ ready }) {
   const titleRef = useRef(null)
   const subRef = useRef(null)
+  const [count, setCount] = useState(null)
+
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+    fetch(`${apiUrl}/api/subscribers/count`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d && typeof d.count === 'number') setCount(d.count) })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!ready) return
@@ -64,7 +73,7 @@ export default function Hero({ ready }) {
         <p className="hero-meta mono" style={{
           marginTop: 18, color: 'var(--text-faint)'
         }}>
-          ≈ 200 devs déjà inscrits
+          ≈ {count ?? '—'} {count === 1 ? 'dev déjà inscrit' : 'devs déjà inscrits'}
         </p>
 
         <div className="hero-tags" style={{

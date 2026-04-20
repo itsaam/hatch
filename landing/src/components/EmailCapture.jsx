@@ -4,11 +4,22 @@ export default function EmailCapture({ size = 'md' }) {
   const [email, setEmail] = useState('')
   const [state, setState] = useState('idle')
 
-  const onSubmit = (e) => {
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+
+  const onSubmit = async (e) => {
     e.preventDefault()
     if (!email || !email.includes('@')) return
     setState('loading')
-    setTimeout(() => setState('success'), 700)
+    try {
+      await fetch(`${apiUrl}/api/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      setState('success')
+    } catch {
+      setState('success')
+    }
   }
 
   const big = size === 'lg'

@@ -27,3 +27,7 @@ pnpm-debug.log*
 .idea
 *.suo
 *.swp
+
+# Go
+core/api/api
+core/api/vendor/
