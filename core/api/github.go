@@ -35,7 +35,7 @@ type prEvent struct {
 	} `json:"repository"`
 }
 
-func githubWebhookHandler(pool *pgxpool.Pool, secret []byte) http.HandlerFunc {
+func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 		if err != nil {
@@ -72,6 +72,14 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte) http.HandlerFunc {
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
 		}
+
+		switch ev.Action {
+		case "opened", "reopened", "synchronize":
+			go deployer.Deploy(ev.Repository.FullName, ev.Number, ev.PullRequest.Head.Ref, ev.PullRequest.Head.SHA)
+		case "closed":
+			go deployer.Destroy(ev.Repository.FullName, ev.Number)
+		}
+
 		writeOK(w)
 	}
 }

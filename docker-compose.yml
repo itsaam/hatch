@@ -1,4 +1,48 @@
 services:
+  socketproxy:
+    image: wollomatic/socket-proxy:1.11.4
+    restart: unless-stopped
+    user: "0:0"
+    read_only: true
+    mem_limit: 64m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges
+    command:
+      - -loglevel=debug
+      - -allowfrom=traefik
+      - -listenip=0.0.0.0
+      - -allowGET=/(_ping|v1\..{1,2}/(version|_ping|containers/.*|networks/.*|services/.*|tasks/.*|events))
+      - -allowHEAD=/(_ping|v1\..{1,2}/(version|_ping|containers/.*|networks/.*|services/.*|tasks/.*))
+      - -watchdoginterval=600
+      - -stoponwatchdog
+      - -shutdowngracetime=5
+      - -socketpath=/var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket
+
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    depends_on:
+      - socketproxy
+    command:
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socketproxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=hatch_public
+      - --entrypoints.web.address=:80
+      - --api.insecure=true
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "127.0.0.1:8081:8080"
+    networks:
+      - public
+      - socket
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -24,9 +68,22 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      HATCH_NETWORK: hatch_public
+      HATCH_DOMAIN: ${HATCH_DOMAIN:-localhost}
       PORT: "8080"
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+networks:
+  default:
+    name: hatch_default
+  public:
+    name: hatch_public
+  socket:
+    name: hatch_socket
+    internal: true
 
 volumes:
   hatch_pgdata:

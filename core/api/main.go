@@ -35,6 +35,8 @@ func main() {
 	dsn := mustEnv("DATABASE_URL")
 	allowedOrigin := mustEnv("ALLOWED_ORIGIN")
 	githubSecret := []byte(mustEnv("GITHUB_WEBHOOK_SECRET"))
+	hatchNetwork := getenv("HATCH_NETWORK", "hatch_public")
+	hatchDomain := getenv("HATCH_DOMAIN", "localhost")
 	port := getenv("PORT", "8080")
 
 	ctx := context.Background()
@@ -51,6 +53,11 @@ func main() {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
+	}
+
+	deployer, err := NewDeployer(pool, hatchNetwork, hatchDomain)
+	if err != nil {
+		log.Fatalf("deployer init: %v", err)
 	}
 
 	r := chi.NewRouter()
@@ -78,7 +85,7 @@ func main() {
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
-	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret))
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer))
 
 	srv := &http.Server{
 		Addr:              ":" + port,
