@@ -45,6 +45,13 @@ type DetectResult struct {
 	Seed      *Seed
 	// Warnings surfaced to the user (e.g. "no Dockerfile, one should be added").
 	Warnings []string
+	// DetectedDeps lists deps we recognized (for verbose UI).
+	DetectedDeps []string
+	// EnvSource records where the env block came from ("package.json", ".env.example"...).
+	EnvSource string
+	// EnvEntries, when non-empty, is the ordered env list parsed from .env.example
+	// with comments attached. Used by Generate() to preserve provenance.
+	EnvEntries []EnvEntry
 }
 
 type Seed struct {
@@ -386,18 +393,62 @@ func detectFromPackageJSON(fs FS) (*DetectResult, error) {
 		warnings = append(warnings, "No Dockerfile found. Hatch will need one to build the `web` service — add a minimal Dockerfile at the repo root.")
 	}
 
+	var result *DetectResult
 	switch {
 	case hasDep("next"):
-		return nextStack(hasDep, warnings), nil
+		result = nextStack(hasDep, warnings)
 	case hasDep("express") || hasDep("fastify"):
-		return nodeAPIStack(hasDep, warnings), nil
+		result = nodeAPIStack(hasDep, warnings)
 	default:
-		return staticStack(warnings), nil
+		result = staticStack(warnings)
 	}
+
+	result.DetectedDeps = detectedNodeDeps(hasDep)
+	applyEnvExample(fs, result)
+	return result, nil
+}
+
+// detectedNodeDeps returns a stable, deduped list of notable deps we recognized.
+func detectedNodeDeps(has func(string) bool) []string {
+	buckets := []struct {
+		label string
+		probes []string
+	}{
+		{"prisma", []string{"prisma", "@prisma/client"}},
+		{"drizzle", []string{"drizzle-orm"}},
+		{"pg", []string{"pg"}},
+		{"mongoose", []string{"mongoose"}},
+		{"redis", []string{"ioredis", "redis", "@upstash/redis"}},
+		{"next-auth", []string{"next-auth", "@auth/prisma-adapter", "@auth/drizzle-adapter", "@auth/core"}},
+		{"stripe", []string{"stripe", "@stripe/stripe-js"}},
+		{"resend", []string{"resend"}},
+		{"sendgrid", []string{"@sendgrid/mail"}},
+		{"nodemailer", []string{"nodemailer"}},
+		{"openai", []string{"openai"}},
+		{"anthropic", []string{"@anthropic-ai/sdk"}},
+		{"aws-s3", []string{"@aws-sdk/client-s3"}},
+		{"cloudflare-r2", []string{"@cloudflare/workers-types"}},
+	}
+	out := []string{}
+	for _, b := range buckets {
+		for _, p := range b.probes {
+			if has(p) {
+				out = append(out, b.label)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// hasRedisDep returns true if the project has any redis client.
+func hasRedisDep(has func(string) bool) bool {
+	return has("ioredis") || has("redis") || has("@upstash/redis")
 }
 
 func nextStack(has func(string) bool, warnings []string) *DetectResult {
 	withDB := has("prisma") || has("@prisma/client") || has("pg") || has("drizzle-orm")
+	withRedis := hasRedisDep(has)
 	web := Service{
 		Name:   "web",
 		Build:  ".",
@@ -409,20 +460,41 @@ func nextStack(has func(string) bool, warnings []string) *DetectResult {
 	}
 	name := "Next.js"
 	services := []Service{web}
+	deps := []string{}
 
 	if withDB {
 		name = "Next.js + Prisma + Postgres"
-		web.Env["DATABASE_URL"] = "postgres://app:${DB_PASSWORD}@db:5432/app"
-		web.DependsOn = []string{"db"}
-		db := postgresService()
-		services = []Service{web, db}
+		web.Env["DATABASE_URL"] = "postgresql://app:${DB_PASSWORD}@db:5432/app?schema=public"
+		deps = append(deps, "db")
+		services = append(services, postgresService())
 	}
+	if withRedis {
+		name += " + Redis"
+		web.Env["REDIS_URL"] = "redis://redis:6379"
+		deps = append(deps, "redis")
+		services = append(services, redisService())
+	}
+	// NextAuth
+	if has("next-auth") || has("@auth/prisma-adapter") || has("@auth/drizzle-adapter") || has("@auth/core") {
+		web.Env["NEXTAUTH_URL"] = "${PREVIEW_URL}"
+		web.Env["NEXTAUTH_SECRET"] = "${DB_PASSWORD}"
+	}
+	// Disable email sending by default in previews.
+	if has("resend") || has("@sendgrid/mail") || has("nodemailer") {
+		web.Env["EMAILS_ENABLED"] = "false"
+	}
+
+	sort.Strings(deps)
+	web.DependsOn = deps
+	// Replace placeholder web in services (it was copied by value above).
+	services[0] = web
 
 	return &DetectResult{StackName: name, Services: services, Warnings: warnings}
 }
 
 func nodeAPIStack(has func(string) bool, warnings []string) *DetectResult {
 	withDB := has("pg") || has("mongoose") || has("prisma") || has("@prisma/client")
+	withRedis := hasRedisDep(has)
 	api := Service{
 		Name:   "api",
 		Build:  ".",
@@ -432,12 +504,25 @@ func nodeAPIStack(has func(string) bool, warnings []string) *DetectResult {
 	}
 	services := []Service{api}
 	name := "Node API"
+	deps := []string{}
 	if withDB {
-		name = "Node API + Postgres"
-		api.Env["DATABASE_URL"] = "postgres://app:${DB_PASSWORD}@db:5432/app"
-		api.DependsOn = []string{"db"}
-		services = []Service{api, postgresService()}
+		name += " + Postgres"
+		api.Env["DATABASE_URL"] = "postgresql://app:${DB_PASSWORD}@db:5432/app?schema=public"
+		deps = append(deps, "db")
+		services = append(services, postgresService())
 	}
+	if withRedis {
+		name += " + Redis"
+		api.Env["REDIS_URL"] = "redis://redis:6379"
+		deps = append(deps, "redis")
+		services = append(services, redisService())
+	}
+	if has("resend") || has("@sendgrid/mail") || has("nodemailer") {
+		api.Env["EMAILS_ENABLED"] = "false"
+	}
+	sort.Strings(deps)
+	api.DependsOn = deps
+	services[0] = api
 	return &DetectResult{StackName: name, Services: services, Warnings: warnings}
 }
 
@@ -552,7 +637,17 @@ func detectFromGemfile(fs FS) (*DetectResult, error) {
 		name += " + Sidekiq"
 	}
 
-	return &DetectResult{StackName: name, Services: services, Warnings: warnings}, nil
+	// Sensible preview env for common gems.
+	if has("stripe") {
+		services[0].Env["STRIPE_SECRET_KEY"] = "sk_test_preview_dummy"
+	}
+	if has("devise") || regexp.MustCompile(`gem\s+['"]omniauth`).MatchString(body) {
+		services[0].Env["APP_URL"] = "${PREVIEW_URL}"
+	}
+
+	result := &DetectResult{StackName: name, Services: services, Warnings: warnings}
+	applyEnvExample(fs, result)
+	return result, nil
 }
 
 // ---------- Python ----------
@@ -607,7 +702,9 @@ func detectFromPython(fs FS) (*DetectResult, error) {
 		name += " + Redis"
 	}
 
-	return &DetectResult{StackName: name, Services: services, Warnings: warnings}, nil
+	result := &DetectResult{StackName: name, Services: services, Warnings: warnings}
+	applyEnvExample(fs, result)
+	return result, nil
 }
 
 func appendUnique(s []string, v string) []string {
@@ -631,3 +728,84 @@ func copyEnv(src map[string]string) map[string]string {
 
 // WalkJoin is a small helper for tests to build absolute-ish paths.
 func WalkJoin(parts ...string) string { return filepath.Join(parts...) }
+
+// applyEnvExample, if a .env.example (or siblings) exists, parses it and merges
+// the resulting entries into the main exposed service, overwriting keys that
+// are already there. The env source is recorded for verbose output.
+func applyEnvExample(fs FS, r *DetectResult) {
+	candidates := []string{".env.example", ".env.sample", ".env.template"}
+	var src string
+	var raw []byte
+	for _, c := range candidates {
+		if fs.Exists(c) {
+			b, err := fs.ReadFile(c)
+			if err == nil {
+				src = c
+				raw = b
+				break
+			}
+		}
+	}
+	if src == "" {
+		return
+	}
+	entries := ParseEnvExample(string(raw))
+	if len(entries) == 0 {
+		return
+	}
+
+	// Find main service (first Expose=true, else first).
+	mainIdx := 0
+	for i, s := range r.Services {
+		if s.Expose {
+			mainIdx = i
+			break
+		}
+	}
+
+	// If the main service has a Port, make sure PORT env matches it.
+	port := r.Services[mainIdx].Port
+
+	// Ensure Redis service exists if we parsed a REDIS_URL and no redis service yet.
+	hasRedisSvc := false
+	for _, s := range r.Services {
+		if s.Name == "redis" {
+			hasRedisSvc = true
+			break
+		}
+	}
+	needsRedis := false
+	for _, e := range entries {
+		if strings.EqualFold(e.Key, "REDIS_URL") {
+			needsRedis = true
+			break
+		}
+	}
+	if needsRedis && !hasRedisSvc {
+		r.Services = append(r.Services, redisService())
+		main := r.Services[mainIdx]
+		main.DependsOn = appendUnique(main.DependsOn, "redis")
+		sort.Strings(main.DependsOn)
+		r.Services[mainIdx] = main
+		if !strings.Contains(r.StackName, "Redis") {
+			r.StackName += " + Redis"
+		}
+	}
+
+	// Merge entries into main service env.
+	main := r.Services[mainIdx]
+	if main.Env == nil {
+		main.Env = map[string]string{}
+	}
+	for _, e := range entries {
+		v := e.Value
+		if strings.EqualFold(e.Key, "PORT") && port > 0 {
+			v = fmt.Sprintf("%d", port)
+		}
+		main.Env[e.Key] = v
+	}
+	r.Services[mainIdx] = main
+
+	r.EnvSource = src
+	r.EnvEntries = entries
+}

@@ -65,7 +65,8 @@ Flags:
   --dry-run         print generated YAML to stdout, don't write
   --force           overwrite an existing .hatch.yml
   --output <path>   output path (default: .hatch.yml)
-  --verbose         print detection details`)
+  --verbose         print detection details
+  --no-animation    disable step delays (still colored if TTY)`)
 }
 
 func runInit(argv []string) error {
@@ -74,6 +75,7 @@ func runInit(argv []string) error {
 	force := fs.Bool("force", false, "overwrite existing .hatch.yml")
 	output := fs.String("output", ".hatch.yml", "output path")
 	verbose := fs.Bool("verbose", false, "verbose logs")
+	noAnim := fs.Bool("no-animation", false, "disable step delays")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -83,34 +85,53 @@ func runInit(argv []string) error {
 		return fmt.Errorf("get cwd: %w", err)
 	}
 
-	fmt.Println("\U0001F95A Hatch init")
-	fmt.Println()
+	ui := NewUI(os.Stdout, *noAnim)
+	ui.Header()
 
 	filesys := osFS{root: cwd}
+
+	ui.Step("Scanning project…")
+
 	result, err := Detect(filesys)
 	if err != nil {
+		ui.Err(err.Error())
 		return err
 	}
 
-	if *verbose {
-		fmt.Printf("Root:          %s\n", cwd)
-		fmt.Printf("Stack:         %s\n", result.StackName)
-		fmt.Printf("Service count: %d\n\n", len(result.Services))
-	}
+	// Post-detection OK lines.
+	reportDetection(ui, filesys, result, *verbose)
 
-	fmt.Printf("Detected stack: %s\n", result.StackName)
-	fmt.Println("Services:")
+	// Build stack.
+	ui.Blank()
+	ui.SectionTitle("Building stack")
 	for _, s := range result.Services {
-		desc := describeService(s)
-		fmt.Printf("  - %s\n", desc)
+		name := s.Name
+		var kind string
+		if s.Image != "" {
+			kind = s.Image
+		} else if s.Build != "" {
+			kind = "build " + s.Build
+		} else {
+			kind = "build ."
+		}
+		port := ""
+		if s.Port > 0 {
+			port = fmt.Sprintf("port %d", s.Port)
+		}
+		extra := ""
+		if s.Expose {
+			extra = "expose ✓"
+		} else if s.Healthcheck != nil {
+			extra = "healthcheck ✓"
+		}
+		ui.ServiceLine(name, kind, port, extra)
 	}
-	fmt.Println()
 
 	yaml := Generate(result)
 
 	if *dryRun {
-		fmt.Println("--- .hatch.yml (dry-run) ---")
-		fmt.Print(yaml)
+		printSummary(ui, yaml, result, "", *dryRun)
+		ui.DryRunBlock(yaml)
 		return nil
 	}
 
@@ -118,45 +139,84 @@ func runInit(argv []string) error {
 	if !filepath.IsAbs(outPath) {
 		outPath = filepath.Join(cwd, outPath)
 	}
-
 	if _, err := os.Stat(outPath); err == nil && !*force {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", outPath)
 	}
-
 	if err := os.WriteFile(outPath, []byte(yaml), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", outPath, err)
 	}
 
-	lines := strings.Count(yaml, "\n")
-	fmt.Printf("%s written (%d lines)\n\n", filepath.Base(outPath), lines)
+	printSummary(ui, yaml, result, filepath.Base(outPath), false)
 
 	if len(result.Warnings) > 0 {
-		fmt.Println("Warnings:")
+		ui.Blank()
 		for _, w := range result.Warnings {
-			fmt.Printf("  ! %s\n", w)
+			ui.Warn(w)
 		}
-		fmt.Println()
 	}
-
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Review the generated file")
-	fmt.Println("  2. Adjust env vars if needed (placeholders: ${SECRET_<NAME>})")
-	fmt.Println("  3. Commit and push to trigger your first preview")
-
 	return nil
 }
 
-func describeService(s Service) string {
-	kind := "image " + s.Image
-	if s.Build != "" {
-		kind = "build " + s.Build
+func reportDetection(ui *UI, filesys FS, r *DetectResult, verbose bool) {
+	// Found a package.json / Gemfile / etc
+	seen := map[string]bool{}
+	for _, f := range []string{"package.json", "Gemfile", "pyproject.toml", "requirements.txt", "docker-compose.yml", "docker-compose.yaml", "compose.yml"} {
+		if filesys.Exists(f) && !seen[f] {
+			ui.OK(fmt.Sprintf("Found %s (%s)", f, r.StackName))
+			seen[f] = true
+			break
+		}
 	}
-	parts := []string{s.Name, kind}
-	if s.Port > 0 {
-		parts = append(parts, fmt.Sprintf("port %d", s.Port))
+	if filesys.Exists("prisma/schema.prisma") {
+		ui.OK("Found prisma/ (Prisma ORM)")
 	}
-	if s.Expose {
-		parts = append(parts, "exposed")
+	if filesys.Exists("drizzle.config.ts") || filesys.Exists("drizzle.config.js") {
+		ui.OK("Found drizzle config (Drizzle ORM)")
 	}
-	return strings.Join(parts, ", ")
+	if r.EnvSource != "" {
+		ui.OK(fmt.Sprintf("Found %s (%d env vars)", r.EnvSource, len(r.EnvEntries)))
+	}
+	if len(r.DetectedDeps) > 0 {
+		ui.OK("Detected dependencies: " + strings.Join(r.DetectedDeps, ", "))
+	}
+	if verbose {
+		ui.Blank()
+		ui.Info(fmt.Sprintf("Root:         %s", mustCwd()))
+		ui.Info(fmt.Sprintf("Stack:        %s", r.StackName))
+		ui.Info(fmt.Sprintf("Services:     %d", len(r.Services)))
+		if r.EnvSource != "" {
+			ui.Info(fmt.Sprintf("Env source:   %s (%d vars)", r.EnvSource, len(r.EnvEntries)))
+		}
+	}
+}
+
+func mustCwd() string {
+	c, _ := os.Getwd()
+	return c
+}
+
+func printSummary(ui *UI, yaml string, r *DetectResult, writtenName string, dryRun bool) {
+	lines := strings.Count(yaml, "\n")
+	envCount := 0
+	for _, s := range r.Services {
+		envCount += len(s.Env)
+	}
+	head := fmt.Sprintf("%d lines · %d services · %d env vars", lines, len(r.Services), envCount)
+
+	title := ".hatch.yml generated"
+	if dryRun {
+		title = ".hatch.yml (dry-run)"
+	} else if writtenName != "" {
+		title = writtenName + " generated"
+	}
+
+	body := []string{
+		head,
+		"",
+		"Next steps:",
+		"  1. Review .hatch.yml (esp. ${SECRET_*})",
+		"  2. hatch secrets add STRIPE_SECRET_KEY",
+		"  3. git commit && git push",
+	}
+	ui.SummaryBox(title, body)
 }
