@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,7 +49,13 @@ type Deployer struct {
 	domain     string
 	notifier   StatusNotifier
 	dockerBase string // e.g. "http://docker"; tests override this.
+	app        *AppClient
 }
+
+// SetAppClient wires the GitHub App client used to fetch `.hatch.yml` and
+// seed files with an installation token. Nil is allowed — the deployer then
+// falls back to unauthenticated GitHub raw fetches (public repos only).
+func (d *Deployer) SetAppClient(app *AppClient) { d.app = app }
 
 func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) {
 	tr := &http.Transport{
@@ -86,46 +93,75 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 	defer cancel()
 
 	slug := slugify(ref.Repo)
-	name := fmt.Sprintf("hatch-preview-%s-%d", slug, ref.PR)
-	tag := fmt.Sprintf("%s:%s", name, shortSHA(ref.SHA))
-	host := fmt.Sprintf("pr-%d-%s.%s", ref.PR, slug, d.domain)
+	host := stackHost(slug, ref.PR, d.domain)
 	publicURL := "https://" + host
 
-	log.Printf("deploy start: %s → %s", name, publicURL)
+	log.Printf("deploy start: %s#%d → %s", ref.Repo, ref.PR, publicURL)
 	d.setStatus(ctx, ref, "building", "")
 
-	if err := d.build(ctx, ref.Repo, ref.SHA, tag); err != nil {
-		log.Printf("build failed %s: %v", name, err)
+	spec, hadFile, err := loadComposeForRef(ctx, d.http, d.app, ref.InstallationID, ref.Repo, ref.SHA)
+	if err != nil {
+		log.Printf("load .hatch.yml %s#%d: %v", ref.Repo, ref.PR, err)
+		d.setStatus(ctx, ref, "failed", "")
+		return
+	}
+	if hadFile {
+		log.Printf("using .hatch.yml for %s#%d (%d services)", ref.Repo, ref.PR, len(spec.Services))
+	} else {
+		log.Printf("no .hatch.yml for %s#%d — falling back to single Dockerfile", ref.Repo, ref.PR)
+	}
+
+	if err := d.deployCompose(ctx, ref, spec, d.app); err != nil {
+		log.Printf("deploy failed %s#%d: %v", ref.Repo, ref.PR, err)
 		d.setStatus(ctx, ref, "failed", "")
 		return
 	}
 
-	_ = d.remove(ctx, name)
-
-	if err := d.run(ctx, name, tag, host); err != nil {
-		log.Printf("run failed %s: %v", name, err)
-		d.setStatus(ctx, ref, "failed", "")
-		return
-	}
-
-	log.Printf("deploy ok: %s → %s", name, publicURL)
+	log.Printf("deploy ok: %s#%d → %s", ref.Repo, ref.PR, publicURL)
 	d.setStatus(ctx, ref, "running", publicURL)
 
-	if err := d.pruneOldImages(ctx, slug, ref.PR, tag); err != nil {
-		log.Printf("prune images %s: %v", name, err)
+	if err := d.pruneOldImagesForStack(ctx, slug, ref.PR, ref.SHA, spec); err != nil {
+		log.Printf("prune images %s#%d: %v", ref.Repo, ref.PR, err)
 	}
 }
 
 func (d *Deployer) Destroy(ref PreviewRef) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
-	name := fmt.Sprintf("hatch-preview-%s-%d", slugify(ref.Repo), ref.PR)
-	if err := d.remove(ctx, name); err != nil {
-		log.Printf("destroy %s: %v", name, err)
-		return
+	slug := slugify(ref.Repo)
+	if err := d.destroyStack(ctx, slug, ref.PR); err != nil {
+		log.Printf("destroy stack %s#%d: %v", ref.Repo, ref.PR, err)
 	}
-	log.Printf("preview destroyed %s", name)
+	// Also remove any legacy single-container preview (keeps older deploys reclaimable).
+	legacy := fmt.Sprintf("hatch-preview-%s-%d", slug, ref.PR)
+	if err := d.remove(ctx, legacy); err != nil {
+		log.Printf("destroy legacy %s: %v", legacy, err)
+	}
+	log.Printf("preview destroyed %s#%d", ref.Repo, ref.PR)
 	d.setStatus(ctx, ref, "closed", "")
+}
+
+// pruneOldImagesForStack prunes outdated tags for every service in the spec
+// that has a build context. Services running from a pulled image are left
+// untouched.
+func (d *Deployer) pruneOldImagesForStack(ctx context.Context, slug string, pr int, sha string, spec *ComposeSpec) error {
+	for name, svc := range spec.Services {
+		if svc == nil || svc.Build == "" {
+			continue
+		}
+		prefix := fmt.Sprintf("hatch-pr-%s-%d-%s:", slug, pr, name)
+		current := buildTag(slug, pr, name, sha)
+		if err := d.pruneOldImagesByPrefix(ctx, prefix, current); err != nil {
+			log.Printf("prune %s: %v", prefix, err)
+		}
+	}
+	// Also prune legacy tags for fallback-era deploys.
+	legacyPrefix := fmt.Sprintf("hatch-preview-%s-%d:", slug, pr)
+	legacyCurrent := fmt.Sprintf("hatch-preview-%s-%d:%s", slug, pr, shortSHA(sha))
+	if err := d.pruneOldImagesByPrefix(ctx, legacyPrefix, legacyCurrent); err != nil {
+		log.Printf("prune legacy %s: %v", legacyPrefix, err)
+	}
+	return nil
 }
 
 func (d *Deployer) build(ctx context.Context, repo, sha, tag string) error {
@@ -159,102 +195,10 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string) error {
 	return nil
 }
 
-type createBody struct {
-	Image            string              `json:"Image"`
-	Labels           map[string]string   `json:"Labels"`
-	HostConfig       hostConfig          `json:"HostConfig"`
-	NetworkingConfig networkingConfig    `json:"NetworkingConfig"`
-	Env              []string            `json:"Env,omitempty"`
-	ExposedPorts     map[string]struct{} `json:"ExposedPorts,omitempty"`
-}
-
-type hostConfig struct {
-	RestartPolicy restartPolicy `json:"RestartPolicy"`
-}
-
+// restartPolicy is the Docker HostConfig.RestartPolicy shape used by the
+// compose-aware create path in deploy_compose.go.
 type restartPolicy struct {
 	Name string `json:"Name"`
-}
-
-type networkingConfig struct {
-	EndpointsConfig map[string]struct{} `json:"EndpointsConfig"`
-}
-
-func (d *Deployer) run(ctx context.Context, name, tag, host string) error {
-	port, err := d.detectPort(ctx, tag)
-	if err != nil {
-		port = "80"
-	}
-
-	r := name
-	body := createBody{
-		Image: tag,
-		Labels: map[string]string{
-			"traefik.enable":         "true",
-			"traefik.docker.network": d.network,
-			fmt.Sprintf("traefik.http.routers.%s.rule", r):                      fmt.Sprintf("Host(`%s`)", host),
-			fmt.Sprintf("traefik.http.routers.%s.entrypoints", r):               "websecure",
-			fmt.Sprintf("traefik.http.routers.%s.tls", r):                       "true",
-			fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", r):          "letsencrypt",
-			fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", r): port,
-			"hatch.managed": "true",
-		},
-		HostConfig: hostConfig{
-			RestartPolicy: restartPolicy{Name: "unless-stopped"},
-		},
-		NetworkingConfig: networkingConfig{
-			EndpointsConfig: map[string]struct{}{d.network: {}},
-		},
-	}
-
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		d.dockerURL("/containers/create?name="+url.QueryEscape(name)),
-		bytes.NewReader(buf))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := d.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("create http %d: %s", resp.StatusCode, truncate(string(respBody), 300))
-	}
-
-	var created struct {
-		ID string `json:"Id"`
-	}
-	if err := json.Unmarshal(respBody, &created); err != nil {
-		return err
-	}
-	if created.ID == "" {
-		return errors.New("empty container id")
-	}
-
-	startReq, err := http.NewRequestWithContext(ctx, "POST",
-		d.dockerURL("/containers/"+created.ID+"/start"), nil)
-	if err != nil {
-		return err
-	}
-	startResp, err := d.http.Do(startReq)
-	if err != nil {
-		return err
-	}
-	defer startResp.Body.Close()
-	if startResp.StatusCode >= 400 {
-		b, _ := io.ReadAll(startResp.Body)
-		return fmt.Errorf("start http %d: %s", startResp.StatusCode, truncate(string(b), 300))
-	}
-	return nil
 }
 
 func (d *Deployer) detectPort(ctx context.Context, tag string) (string, error) {
@@ -334,9 +278,16 @@ func slugify(s string) string {
 }
 
 // pruneOldImages removes images tagged `hatch-preview-<slug>-<pr>:*` that are
-// not the currently deployed tag. Errors from "image in use" (409) are
-// swallowed — the running container legitimately holds a reference.
+// not the currently deployed tag. Kept for the legacy single-container path
+// and existing tests.
 func (d *Deployer) pruneOldImages(ctx context.Context, slug string, pr int, currentTag string) error {
+	prefix := fmt.Sprintf("hatch-preview-%s-%d:", slug, pr)
+	return d.pruneOldImagesByPrefix(ctx, prefix, currentTag)
+}
+
+// pruneOldImagesByPrefix deletes every image whose tag matches the prefix
+// except the current tag. 409 ("image in use") errors are swallowed.
+func (d *Deployer) pruneOldImagesByPrefix(ctx context.Context, prefix, currentTag string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		d.dockerURL("/images/json?all=0"), nil)
 	if err != nil {
@@ -360,7 +311,6 @@ func (d *Deployer) pruneOldImages(ctx context.Context, slug string, pr int, curr
 		return fmt.Errorf("prune list decode: %w", err)
 	}
 
-	prefix := fmt.Sprintf("hatch-preview-%s-%d:", slug, pr)
 	for _, img := range images {
 		for _, tag := range img.RepoTags {
 			if !strings.HasPrefix(tag, prefix) || tag == currentTag {
@@ -538,25 +488,69 @@ func (d *Deployer) reconcileOrphanContainers(ctx context.Context, store previewS
 		return 0, fmt.Errorf("load active previews: %w", err)
 	}
 
-	removed := 0
+	// Group containers by (slug, pr) so whole stacks are destroyed together.
+	// Preferred source is labels (hatch.slug / hatch.pr); we fall back to
+	// parsing the legacy name when labels are missing.
+	type group struct {
+		slug      string
+		pr        int
+		container []struct {
+			id   string
+			name string
+		}
+	}
+	groups := map[previewKey]*group{}
+
 	for _, c := range containers {
 		name := primaryContainerName(c.Names)
-		if name == "" {
+		slug := c.Labels["hatch.slug"]
+		prStr := c.Labels["hatch.pr"]
+		var pr int
+		if slug != "" && prStr != "" {
+			n, err := strconv.Atoi(prStr)
+			if err != nil {
+				continue
+			}
+			pr = n
+		} else if name != "" {
+			s, p, ok := parsePreviewName(name)
+			if !ok {
+				continue
+			}
+			slug, pr = s, p
+		} else {
 			continue
 		}
-		slug, pr, ok := parsePreviewName(name)
+		k := previewKey{slug: slug, pr: pr}
+		g, ok := groups[k]
 		if !ok {
+			g = &group{slug: slug, pr: pr}
+			groups[k] = g
+		}
+		g.container = append(g.container, struct{ id, name string }{id: c.ID, name: name})
+	}
+
+	removed := 0
+	for k, g := range groups {
+		if activeKeys[k] {
 			continue
 		}
-		if activeKeys[previewKey{slug: slug, pr: pr}] {
-			continue
+		// Destroy every container in the orphan stack plus the network.
+		for _, c := range g.container {
+			target := c.name
+			if target == "" {
+				target = c.id
+			}
+			if err := d.remove(ctx, target); err != nil {
+				log.Printf("reconcile remove %s: %v", target, err)
+				continue
+			}
+			removed++
+			log.Printf("reconciled: removed orphan container %s", target)
 		}
-		if err := d.remove(ctx, name); err != nil {
-			log.Printf("reconcile remove %s: %v", name, err)
-			continue
+		if err := d.removeNetwork(ctx, networkName(g.slug, g.pr)); err != nil {
+			log.Printf("reconcile remove network %s: %v", networkName(g.slug, g.pr), err)
 		}
-		removed++
-		log.Printf("reconciled: removed orphan container %s", name)
 	}
 	return removed, nil
 }
@@ -593,13 +587,20 @@ func (d *Deployer) reconcileZombiePreviews(ctx context.Context, store previewSto
 
 	marked := 0
 	for _, p := range list {
-		name := fmt.Sprintf("hatch-preview-%s-%d", slugify(p.repo), p.pr)
-		exists, err := d.containerExists(ctx, name)
+		slug := slugify(p.repo)
+		// Check 1: legacy single container name.
+		legacyName := fmt.Sprintf("hatch-preview-%s-%d", slug, p.pr)
+		exists, err := d.containerExists(ctx, legacyName)
 		if err != nil {
-			log.Printf("reconcile inspect %s: %v", name, err)
+			log.Printf("reconcile inspect %s: %v", legacyName, err)
 			continue
 		}
 		if exists {
+			continue
+		}
+		// Check 2: any stack container labelled hatch.slug/hatch.pr.
+		stack, err := d.listStackContainers(ctx, slug, p.pr)
+		if err == nil && len(stack) > 0 {
 			continue
 		}
 		if err := store.markFailed(ctx, p.repo, p.pr); err != nil {
@@ -682,9 +683,13 @@ func (d *Deployer) reapOnce(ctx context.Context, store previewStore, ttl time.Du
 }
 
 func (d *Deployer) expirePreview(ctx context.Context, store previewStore, ref PreviewRef, days int) {
-	name := fmt.Sprintf("hatch-preview-%s-%d", slugify(ref.Repo), ref.PR)
-	if err := d.remove(ctx, name); err != nil {
-		log.Printf("reaper remove %s: %v", name, err)
+	slug := slugify(ref.Repo)
+	if err := d.destroyStack(ctx, slug, ref.PR); err != nil {
+		log.Printf("reaper destroy stack %s#%d: %v", ref.Repo, ref.PR, err)
+	}
+	legacy := fmt.Sprintf("hatch-preview-%s-%d", slug, ref.PR)
+	if err := d.remove(ctx, legacy); err != nil {
+		log.Printf("reaper remove %s: %v", legacy, err)
 	}
 	if err := store.markExpired(ctx, ref.Repo, ref.PR); err != nil {
 		log.Printf("reaper mark expired %s#%d: %v", ref.Repo, ref.PR, err)

@@ -311,13 +311,21 @@ func (r *recordingNotifier) OnHibernated(_ context.Context, ref PreviewRef, days
 func TestTTLReaper_ExpiresOldPreviews(t *testing.T) {
 	t.Parallel()
 
-	// Docker mock accepts DELETE for any container.
+	// Docker mock accepts GET for listing and DELETE for removal. Listing
+	// is used by the stack-aware cleanup path; it returns an empty array
+	// (nothing to destroy beyond the legacy single container).
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.43/containers/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	})
 	mux.HandleFunc("/v1.43/containers/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
-			t.Errorf("expected DELETE, got %s", r.Method)
+			t.Errorf("expected DELETE, got %s on %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/v1.43/networks/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -359,8 +367,14 @@ func TestStartTTLReaper_StopsOnContextCancel(t *testing.T) {
 	t.Parallel()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.43/containers/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	})
 	mux.HandleFunc("/v1.43/containers/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/v1.43/networks/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

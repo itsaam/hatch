@@ -92,6 +92,7 @@ func main() {
 	}
 
 	deployer.SetNotifier(&prNotifier{pool: pool, app: appClient})
+	deployer.SetAppClient(appClient)
 
 	reconcileCtx, reconcileCancel := context.WithTimeout(rootCtx, 30*time.Second)
 	if err := deployer.Reconcile(reconcileCtx, pool); err != nil {
