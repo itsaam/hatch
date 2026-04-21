@@ -537,27 +537,81 @@ async function actionViewLogs(p) {
   state.modal = { type: 'logs', preview: p, data: null, err: null, _timer: null };
   render();
 
+  // True when the user has an active text selection anywhere inside the
+  // logs modal. Used to skip renders that would wipe out their copy.
+  const hasSelectionInModal = () => {
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.anchorNode) return false;
+    const modal = document.querySelector('.modal-backdrop .modal');
+    if (!modal) return false;
+    return modal.contains(sel.anchorNode) || (sel.focusNode && modal.contains(sel.focusNode));
+  };
+
+  // Build a stable signature of the logs payload so we only re-render
+  // when something actually changed.
+  const signature = (d) => {
+    if (!d) return '';
+    if (d.kind === 'runtime') return 'r:' + (d.logs || '').length + ':' + (d.logs || '').slice(-200);
+    if (d.kind === 'build') {
+      return 'b:' + (d.services || []).map((s) => `${s.service}|${s.status}|${(s.output || '').length}|${s.error || ''}`).join(';');
+    }
+    return JSON.stringify(d).slice(0, 500);
+  };
+
+  // Builds reach a terminal state when every service is success or failed.
+  // Stop polling then — no more changes coming.
+  const isTerminal = (d) => {
+    if (!d) return false;
+    if (d.kind === 'runtime') return false; // keep following runtime logs
+    if (d.kind === 'build') {
+      const svcs = d.services || [];
+      if (!svcs.length) return false;
+      return svcs.every((s) => s.status === 'success' || s.status === 'failed');
+    }
+    return false;
+  };
+
   const refresh = async () => {
     if (!state.modal || state.modal.type !== 'logs' || state.modal.preview !== p) return;
+    let next;
     try {
       const data = await fetchLogsFor(p);
-      // Normalise: old API returned {logs: "..."} without kind — treat as runtime.
       if (data && typeof data === 'object' && !data.kind && typeof data.logs === 'string') {
-        state.modal.data = { kind: 'runtime', logs: data.logs };
+        next = { kind: 'runtime', logs: data.logs };
       } else if (typeof data === 'string') {
-        state.modal.data = { kind: 'runtime', logs: data };
+        next = { kind: 'runtime', logs: data };
       } else {
-        state.modal.data = data;
+        next = data;
       }
       state.modal.err = null;
     } catch (e) {
-      // If there are no logs yet, keep polling — don't flash an error.
-      if (!state.modal.data) state.modal.err = e.message;
+      if (!state.modal.data) { state.modal.err = e.message; render(); }
+      return;
     }
+
+    const prevSig = signature(state.modal.data);
+    const newSig = signature(next);
+    state.modal.data = next;
+
+    // If the user is selecting/copying text, don't repaint — their selection
+    // would vanish. We'll try again next tick.
+    if (hasSelectionInModal()) return;
+
+    // No visible change → no-op. Saves a repaint and keeps scroll position.
+    if (prevSig === newSig && prevSig !== '') return;
+
     render();
+
+    if (isTerminal(next) && state.modal._timer) {
+      clearInterval(state.modal._timer);
+      state.modal._timer = null;
+    }
   };
 
   await refresh();
+  // First render after the initial fetch so the user sees something
+  // immediately even if nothing changed since open.
+  if (state.modal && state.modal.data) render();
   state.modal._timer = setInterval(refresh, 2500);
 }
 
