@@ -273,6 +273,21 @@ table.previews { width: 100%; border-collapse: collapse; }
   max-height: 60vh; overflow-y: auto;
 }
 .modal-foot { padding: 14px 22px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+.build-logs { display: flex; flex-direction: column; gap: 18px; }
+.build-svc .build-svc-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.build-svc .build-svc-head .mono {
+  font-family: var(--font-mono); font-size: 12px; color: var(--text);
+  letter-spacing: 0.3px;
+}
+.build-svc .build-err {
+  background: rgba(229,115,115,0.06); border: 1px solid rgba(229,115,115,0.32);
+  color: var(--red); border-radius: 6px; padding: 10px 12px;
+  font-family: var(--font-mono); font-size: 12px; margin-bottom: 8px;
+  white-space: pre-wrap; word-break: break-word;
+}
 
 /* ---------- login ---------- */
 .login-wrap {
@@ -511,16 +526,39 @@ function showToast(message, kind = 'info') {
 }
 
 // ---------- actions ----------
+async function fetchLogsFor(p) {
+  const [owner, repo] = p.repo_full_name.split('/');
+  return api(`/api/previews/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${p.pr_number}/logs`);
+}
+
 async function actionViewLogs(p) {
-  state.modal = { type: 'logs', preview: p, logs: null, err: null };
+  // Cancel any previous poller for safety.
+  if (state.modal && state.modal._timer) clearInterval(state.modal._timer);
+  state.modal = { type: 'logs', preview: p, data: null, err: null, _timer: null };
   render();
-  try {
-    const data = await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}/logs`);
-    state.modal.logs = typeof data === 'string' ? data : (data.logs || '');
-  } catch (e) {
-    state.modal.err = e.message;
-  }
-  render();
+
+  const refresh = async () => {
+    if (!state.modal || state.modal.type !== 'logs' || state.modal.preview !== p) return;
+    try {
+      const data = await fetchLogsFor(p);
+      // Normalise: old API returned {logs: "..."} without kind — treat as runtime.
+      if (data && typeof data === 'object' && !data.kind && typeof data.logs === 'string') {
+        state.modal.data = { kind: 'runtime', logs: data.logs };
+      } else if (typeof data === 'string') {
+        state.modal.data = { kind: 'runtime', logs: data };
+      } else {
+        state.modal.data = data;
+      }
+      state.modal.err = null;
+    } catch (e) {
+      // If there are no logs yet, keep polling — don't flash an error.
+      if (!state.modal.data) state.modal.err = e.message;
+    }
+    render();
+  };
+
+  await refresh();
+  state.modal._timer = setInterval(refresh, 2500);
 }
 
 function actionRedeploy(p) {
@@ -868,21 +906,53 @@ function viewModal() {
   if (!state.modal) return null;
 
   if (state.modal.type === 'logs') {
-    const { preview, logs, err } = state.modal;
-    const body = err
-      ? h('div', { class: 'state' }, h('div', { class: 'title' }, 'Erreur'), h('div', { class: 'sub' }, err))
-      : logs === null
-        ? h('div', { class: 'state' }, h('div', { class: 'spinner' }), h('div', { class: 'title' }, 'Chargement des logs…'))
-        : h('div', { class: 'logs' }, logs || '(vide)');
+    const { preview, data, err } = state.modal;
 
-    return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) { state.modal = null; render(); } } },
+    const closeModal = () => {
+      if (state.modal && state.modal._timer) clearInterval(state.modal._timer);
+      state.modal = null;
+      render();
+    };
+
+    let body;
+    if (err && !data) {
+      body = h('div', { class: 'state' }, h('div', { class: 'title' }, 'Erreur'), h('div', { class: 'sub' }, err));
+    } else if (!data) {
+      body = h('div', { class: 'state' }, h('div', { class: 'spinner' }), h('div', { class: 'title' }, 'Chargement des logs…'));
+    } else if (data.kind === 'runtime') {
+      body = h('div', { class: 'logs' }, data.logs || '(vide)');
+    } else if (data.kind === 'build') {
+      const services = data.services || [];
+      if (!services.length) {
+        body = h('div', { class: 'state' }, h('div', { class: 'sub' }, 'Pas de logs de build.'));
+      } else {
+        body = h('div', { class: 'build-logs' },
+          ...services.map((svc) => h('div', { class: 'build-svc' },
+            h('div', { class: 'build-svc-head' },
+              h('span', { class: 'mono' }, svc.service),
+              h('span', { class: 'badge ' + (svc.status === 'success' ? 'running' : svc.status === 'failed' ? 'failed' : 'building') }, svc.status),
+            ),
+            svc.error ? h('div', { class: 'build-err' }, svc.error) : null,
+            h('div', { class: 'logs' }, svc.output || '(stream vide)'),
+          )),
+        );
+      }
+    } else {
+      body = h('div', { class: 'logs' }, '(pas de format reconnu)');
+    }
+
+    const kindTag = data?.kind
+      ? h('span', { class: 'sub', style: 'margin-left:8px;opacity:0.7' }, data.kind === 'build' ? 'build logs' : 'runtime logs')
+      : null;
+
+    return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) closeModal(); } },
       h('div', { class: 'modal' },
         h('div', { class: 'modal-head' },
           h('div', {},
-            h('h3', {}, `Logs — ${preview.repo_full_name} #${preview.pr_number}`),
+            h('h3', {}, `Logs — ${preview.repo_full_name} #${preview.pr_number}`, kindTag),
             h('div', { class: 'sub' }, `${preview.branch || '—'} · ${shortSha(preview.commit_sha)}`),
           ),
-          h('button', { class: 'btn-icon', onClick: () => { state.modal = null; render(); }, html: svgIcon('close') }),
+          h('button', { class: 'btn-icon', onClick: closeModal, html: svgIcon('close') }),
         ),
         h('div', { class: 'modal-body' }, body),
       ),
