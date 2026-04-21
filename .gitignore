@@ -35,3 +35,6 @@ core/api/vendor/
 # Secrets
 core/api/secrets/
 *.pem
+
+# Claude Code local state
+.claude/
