@@ -691,30 +691,3 @@ func (d *Deployer) listStackContainers(ctx context.Context, slug string, pr int)
 	return out, nil
 }
 
-// listAllHatchContainers returns every container with hatch.managed=true and
-// a parseable (slug, pr) label pair.
-func (d *Deployer) listAllHatchContainers(ctx context.Context) ([]dockerContainer, error) {
-	filters := `{"label":["hatch.managed=true"]}`
-	q := url.Values{}
-	q.Set("all", "true")
-	q.Set("filters", filters)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		d.dockerURL("/containers/json?"+q.Encode()), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := d.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("list hatch containers http %d: %s", resp.StatusCode, truncate(string(b), 200))
-	}
-	var out []dockerContainer
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
