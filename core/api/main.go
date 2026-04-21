@@ -37,6 +37,9 @@ var migrationPreviewExpired string
 //go:embed migrations/005_repo_secrets.sql
 var migrationRepoSecrets string
 
+//go:embed migrations/006_build_logs.sql
+var migrationBuildLogs string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -66,7 +69,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}

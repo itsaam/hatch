@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,7 +200,7 @@ func (d *Deployer) pruneOldImagesForStack(ctx context.Context, slug string, pr i
 	return nil
 }
 
-func (d *Deployer) build(ctx context.Context, repo, sha, tag, dockerfile string, installationID int64) error {
+func (d *Deployer) build(ctx context.Context, repo string, pr int, sha, service, tag, dockerfile string, installationID int64) error {
 	// For private repos, embed the installation token in the clone URL so
 	// the Docker daemon can fetch the tree without prompting.
 	// Public repos still work with the plain URL.
@@ -222,29 +224,190 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag, dockerfile string,
 		q.Set("dockerfile", dockerfile)
 	}
 
+	// Insert a build_logs row upfront so the dashboard can show "running"
+	// status and stream output as it arrives. Best-effort — failures here
+	// don't block the build.
+	var logID int64
+	if d.pool != nil {
+		_ = d.pool.QueryRow(ctx,
+			`INSERT INTO build_logs (repo_full_name, pr_number, commit_sha, service, status)
+			 VALUES ($1,$2,$3,$4,'running') RETURNING id`,
+			repo, pr, sha, service,
+		).Scan(&logID)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		d.dockerURL("/build?"+q.Encode()),
 		bytes.NewReader(nil))
 	if err != nil {
+		d.finishBuildLog(ctx, logID, "", "failed", err.Error())
 		return err
 	}
 	req.Header.Set("Content-Type", "application/tar")
 
 	resp, err := d.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("build request: %w", scrubToken(err))
+		err = fmt.Errorf("build request: %w", scrubToken(err))
+		d.finishBuildLog(ctx, logID, "", "failed", err.Error())
+		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("build http %d: %s", resp.StatusCode, scrubString(truncateTail(string(body), 800)))
+		body, _ := io.ReadAll(resp.Body)
+		msg := scrubString(truncateTail(string(body), 800))
+		d.finishBuildLog(ctx, logID, msg, "failed", msg)
+		return fmt.Errorf("build http %d: %s", resp.StatusCode, msg)
 	}
-	// Docker streams one JSON object per line. Errors appear as
-	// {"errorDetail":{...},"error":"..."} — more specific than just "error".
-	if bytes.Contains(body, []byte(`"errorDetail"`)) {
-		return fmt.Errorf("build stream error: %s", scrubString(truncateTail(string(body), 1200)))
+
+	// Stream the build output line by line. Each line is a JSON object; we
+	// extract the human-readable fields (stream/error) and best-effort
+	// buildkit vertex names. Raw bytes are retained so the dashboard can
+	// show everything even if parsing misses something.
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var pretty strings.Builder
+	var streamErr string
+	var lastFlush time.Time
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		extractBuildLine(line, &pretty, &streamErr)
+		// Periodic flush so the dashboard sees live progress.
+		if d.pool != nil && logID > 0 && time.Since(lastFlush) > 1500*time.Millisecond {
+			_, _ = d.pool.Exec(ctx,
+				`UPDATE build_logs SET raw_output=$1 WHERE id=$2`,
+				scrubString(pretty.String()), logID,
+			)
+			lastFlush = time.Now()
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		streamErr = fmt.Sprintf("scan build stream: %v", err)
+	}
+
+	finalStatus := "success"
+	if streamErr != "" {
+		finalStatus = "failed"
+	}
+	d.finishBuildLog(ctx, logID, pretty.String(), finalStatus, streamErr)
+
+	if streamErr != "" {
+		return fmt.Errorf("build stream error: %s", scrubString(truncateTail(streamErr, 1200)))
 	}
 	return nil
+}
+
+// finishBuildLog marks a build_logs row completed. Best-effort; errors
+// are logged but never propagated — persistence must not break the build.
+func (d *Deployer) finishBuildLog(ctx context.Context, id int64, output, status, errMsg string) {
+	if d.pool == nil || id == 0 {
+		return
+	}
+	// Use a background ctx so failed ctx cancellations from the outer
+	// request don't leave a "running" row hanging forever.
+	bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var errPtr any
+	if errMsg != "" {
+		errPtr = scrubString(errMsg)
+	}
+	_, err := d.pool.Exec(bgCtx,
+		`UPDATE build_logs
+		   SET raw_output=$1, status=$2, error=$3, completed_at=NOW()
+		 WHERE id=$4`,
+		scrubString(output), status, errPtr, id,
+	)
+	if err != nil {
+		log.Printf("finish build log %d: %v", id, err)
+	}
+	_ = ctx
+}
+
+// extractBuildLine parses a single Docker /build stream JSON line and
+// appends any human-readable content to pretty. Captures error text in
+// streamErr for the first fatal line seen.
+func extractBuildLine(line []byte, pretty *strings.Builder, streamErr *string) {
+	var obj map[string]any
+	if err := json.Unmarshal(line, &obj); err != nil {
+		pretty.Write(line)
+		pretty.WriteByte('\n')
+		return
+	}
+	if s, _ := obj["stream"].(string); s != "" {
+		pretty.WriteString(s)
+	}
+	if s, _ := obj["status"].(string); s != "" {
+		pretty.WriteString(s)
+		pretty.WriteByte('\n')
+	}
+	if e, _ := obj["error"].(string); e != "" {
+		if *streamErr == "" {
+			*streamErr = e
+		}
+		pretty.WriteString("\n[ERROR] ")
+		pretty.WriteString(e)
+		pretty.WriteByte('\n')
+	}
+	// Best-effort buildkit vertex extraction: the base64 aux blob is a
+	// protobuf, but step names appear inline as readable substrings. We
+	// scan for runs of printable bytes starting with "[" or capital/lower
+	// letters that look like "[internal] load ..." or "[build x/y] ...".
+	if auxS, _ := obj["aux"].(string); auxS != "" && obj["id"] == "moby.buildkit.trace" {
+		if raw, err := base64DecodeLoose(auxS); err == nil {
+			for _, frag := range readableFragments(raw) {
+				pretty.WriteString(frag)
+				pretty.WriteByte('\n')
+			}
+		}
+	}
+}
+
+// base64DecodeLoose tolerates padding variants that Docker occasionally
+// emits. Returns an error only if the input is complete garbage.
+func base64DecodeLoose(s string) ([]byte, error) {
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
+		return b, nil
+	}
+	return base64.RawStdEncoding.DecodeString(s)
+}
+
+// readableFragments pulls out human-readable substrings (>=12 chars) from
+// a protobuf payload. Used to surface buildkit vertex names without a
+// full proto dependency. Filters to fragments that look like step names.
+func readableFragments(b []byte) []string {
+	var out []string
+	start := -1
+	emit := func(end int) {
+		if start < 0 || end-start < 12 {
+			start = -1
+			return
+		}
+		frag := string(b[start:end])
+		// Keep if it looks like a step name: starts with [ or capital or
+		// contains "load"/"RUN"/"COPY"/"FROM".
+		if strings.HasPrefix(frag, "[") ||
+			strings.Contains(frag, " load ") ||
+			strings.Contains(frag, "RUN ") ||
+			strings.Contains(frag, "COPY ") ||
+			strings.Contains(frag, "FROM ") ||
+			strings.Contains(frag, "resolve image") ||
+			strings.Contains(frag, "docker-image://") {
+			out = append(out, frag)
+		}
+		start = -1
+	}
+	for i, c := range b {
+		printable := c >= 0x20 && c < 0x7f
+		if printable {
+			if start < 0 {
+				start = i
+			}
+		} else {
+			emit(i)
+		}
+	}
+	emit(len(b))
+	return out
 }
 
 // scrubToken redacts GitHub credentials from error strings so tokens never

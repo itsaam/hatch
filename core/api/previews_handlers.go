@@ -139,8 +139,11 @@ func loadPreviewRef(ctx context.Context, pool *pgxpool.Pool, repo string, pr int
 	return ref, true, nil
 }
 
-// previewLogsHandler streams the last N lines of the exposed container's
-// stdout+stderr via the Docker API.
+// previewLogsHandler returns logs for a preview. When ?kind=build it pulls
+// the most recent build_logs rows (one per service). Otherwise (kind=runtime
+// or absent) it streams the exposed container's stdout+stderr via Docker.
+// If the preview never produced a running container, it falls back to the
+// latest build logs automatically so a failed build can still be inspected.
 func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repo, pr, ok := parsePreviewPath(w, r)
@@ -161,28 +164,76 @@ func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc
 			return
 		}
 
-		container, err := deployer.exposedContainerName(ctx, repo, pr)
-		if err != nil {
-			log.Printf("locate exposed container %s#%d: %v", repo, pr, err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "docker error"})
-			return
-		}
-		if container == "" {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
-			return
-		}
+		kind := r.URL.Query().Get("kind")
 
-		logs, err := deployer.containerLogs(ctx, container, 200)
-		if err != nil {
-			if err == errContainerNotFound {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "container not found"})
+		if kind != "build" {
+			container, err := deployer.exposedContainerName(ctx, repo, pr)
+			if err != nil {
+				log.Printf("locate exposed container %s#%d: %v", repo, pr, err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "docker error"})
 				return
 			}
-			log.Printf("logs %s: %v", container, err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "docker error"})
+			if container != "" {
+				logs, err := deployer.containerLogs(ctx, container, 500)
+				if err == nil {
+					writeJSON(w, http.StatusOK, map[string]any{"kind": "runtime", "logs": logs})
+					return
+				}
+				if err != errContainerNotFound {
+					log.Printf("logs %s: %v", container, err)
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "docker error"})
+					return
+				}
+				// container vanished — fall through to build logs
+			}
+			// No runtime container — caller implicitly wanted runtime but we
+			// only have build output. Return build logs (still useful) with
+			// kind set so the UI knows to label them as such.
+		}
+
+		// Build logs path: latest row per service for this PR.
+		rows, err := pool.Query(ctx, `
+			SELECT DISTINCT ON (service) service, status, COALESCE(raw_output,''), COALESCE(error,''), started_at, completed_at
+			FROM build_logs
+			WHERE repo_full_name=$1 AND pr_number=$2
+			ORDER BY service, started_at DESC
+		`, repo, pr)
+		if err != nil {
+			log.Printf("build logs query %s#%d: %v", repo, pr, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db error"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
+		defer rows.Close()
+
+		type buildRow struct {
+			Service     string  `json:"service"`
+			Status      string  `json:"status"`
+			Output      string  `json:"output"`
+			Error       string  `json:"error,omitempty"`
+			StartedAt   string  `json:"started_at"`
+			CompletedAt *string `json:"completed_at,omitempty"`
+		}
+		var out []buildRow
+		for rows.Next() {
+			var b buildRow
+			var started time.Time
+			var completed *time.Time
+			if err := rows.Scan(&b.Service, &b.Status, &b.Output, &b.Error, &started, &completed); err != nil {
+				log.Printf("build logs scan %s#%d: %v", repo, pr, err)
+				continue
+			}
+			b.StartedAt = started.UTC().Format(time.RFC3339)
+			if completed != nil {
+				s := completed.UTC().Format(time.RFC3339)
+				b.CompletedAt = &s
+			}
+			out = append(out, b)
+		}
+		if len(out) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no logs yet"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"kind": "build", "services": out})
 	}
 }
 

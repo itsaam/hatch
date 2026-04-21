@@ -131,7 +131,7 @@ func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *Comp
 			continue
 		}
 		tag := buildTag(slug, ref.PR, name, ref.SHA)
-		if err := d.build(ctx, ref.Repo, ref.SHA, tag, svc.Dockerfile, ref.InstallationID); err != nil {
+		if err := d.build(ctx, ref.Repo, ref.PR, ref.SHA, name, tag, svc.Dockerfile, ref.InstallationID); err != nil {
 			return fmt.Errorf("build %s: %w", name, err)
 		}
 	}
