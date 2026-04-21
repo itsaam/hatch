@@ -282,6 +282,20 @@ table.previews { width: 100%; border-collapse: collapse; }
   font-family: var(--font-mono); font-size: 12px; color: var(--text);
   letter-spacing: 0.3px;
 }
+.build-svc .row-right { display: flex; align-items: center; gap: 8px; }
+.log-block { display: flex; flex-direction: column; gap: 8px; }
+.log-block-head {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.copy-btn {
+  background: transparent; border: 1px solid var(--border-strong);
+  color: var(--text-mute); border-radius: 6px; padding: 3px 10px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.3px;
+  text-transform: uppercase; cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.copy-btn:hover { color: var(--text); border-color: var(--text-faint); }
+.copy-btn.ok { color: var(--green); border-color: rgba(127,217,156,0.4); }
 .build-svc .build-err {
   background: rgba(229,115,115,0.06); border: 1px solid rgba(229,115,115,0.32);
   color: var(--red); border-radius: 6px; padding: 10px 12px;
@@ -537,36 +551,86 @@ async function actionViewLogs(p) {
   state.modal = { type: 'logs', preview: p, data: null, err: null, _timer: null };
   render();
 
-  // True when the user has an active text selection anywhere inside the
-  // logs modal. Used to skip renders that would wipe out their copy.
-  const hasSelectionInModal = () => {
-    const sel = window.getSelection && window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.anchorNode) return false;
-    const modal = document.querySelector('.modal-backdrop .modal');
-    if (!modal) return false;
-    return modal.contains(sel.anchorNode) || (sel.focusNode && modal.contains(sel.focusNode));
-  };
-
-  // Build a stable signature of the logs payload so we only re-render
-  // when something actually changed.
-  const signature = (d) => {
-    if (!d) return '';
-    if (d.kind === 'runtime') return 'r:' + (d.logs || '').length + ':' + (d.logs || '').slice(-200);
-    if (d.kind === 'build') {
-      return 'b:' + (d.services || []).map((s) => `${s.service}|${s.status}|${(s.output || '').length}|${s.error || ''}`).join(';');
-    }
-    return JSON.stringify(d).slice(0, 500);
-  };
-
   // Builds reach a terminal state when every service is success or failed.
   // Stop polling then — no more changes coming.
   const isTerminal = (d) => {
     if (!d) return false;
-    if (d.kind === 'runtime') return false; // keep following runtime logs
+    if (d.kind === 'runtime') return false;
     if (d.kind === 'build') {
       const svcs = d.services || [];
       if (!svcs.length) return false;
       return svcs.every((s) => s.status === 'success' || s.status === 'failed');
+    }
+    return false;
+  };
+
+  // Does the currently-rendered modal have a structure that matches
+  // `next`? If yes we can patch in place instead of re-rendering.
+  const canPatch = (next) => {
+    const modal = document.querySelector('.modal[data-modal="logs"]');
+    if (!modal) return false;
+    if (!next) return false;
+    if (next.kind === 'runtime') {
+      return !!modal.querySelector('[data-role="runtime-logs"]');
+    }
+    if (next.kind === 'build') {
+      const have = Array.from(modal.querySelectorAll('.build-svc')).map((el) => el.dataset.service);
+      const want = (next.services || []).map((s) => s.service);
+      if (have.length !== want.length) return false;
+      return want.every((s) => have.includes(s));
+    }
+    return false;
+  };
+
+  // Patch the already-mounted logs DOM in place. Preserves text selection,
+  // scroll position, focus, and triggers no virtual-DOM rebuild.
+  const patch = (next) => {
+    const modal = document.querySelector('.modal[data-modal="logs"]');
+    if (!modal) return false;
+
+    const autoScroll = (el, write) => {
+      const stickToBottom = el.scrollHeight - el.clientHeight - el.scrollTop < 12;
+      write();
+      if (stickToBottom) el.scrollTop = el.scrollHeight;
+    };
+
+    if (next.kind === 'runtime') {
+      const pre = modal.querySelector('[data-role="runtime-logs"]');
+      if (!pre) return false;
+      const text = next.logs || '(vide)';
+      if (pre.textContent !== text) autoScroll(pre, () => { pre.textContent = text; });
+      return true;
+    }
+    if (next.kind === 'build') {
+      for (const svc of next.services || []) {
+        const el = modal.querySelector(`.build-svc[data-service="${CSS.escape(svc.service)}"]`);
+        if (!el) return false;
+        const badge = el.querySelector('[data-role="status"]');
+        const err = el.querySelector('[data-role="error"]');
+        const out = el.querySelector('[data-role="output"]');
+        if (badge) {
+          const want = svc.status === 'success' ? 'running' : svc.status === 'failed' ? 'failed' : 'building';
+          const cur = Array.from(badge.classList).find((c) => ['running','building','failed'].includes(c));
+          if (cur !== want) { badge.classList.remove('running','building','failed'); badge.classList.add(want); }
+          if (badge.textContent !== svc.status) badge.textContent = svc.status;
+        }
+        if (err) {
+          if (svc.error) {
+            if (err.textContent !== svc.error) err.textContent = svc.error;
+            if (err.style.display === 'none') err.style.display = '';
+          } else if (err.style.display !== 'none') {
+            err.style.display = 'none';
+          }
+        }
+        if (out) {
+          const text = svc.output || '(stream vide)';
+          if (out.textContent !== text) autoScroll(out, () => { out.textContent = text; });
+        }
+      }
+      // Update kind tag if present.
+      const tag = modal.querySelector('.kind-tag');
+      if (tag) tag.textContent = 'build logs';
+      return true;
     }
     return false;
   };
@@ -589,18 +653,21 @@ async function actionViewLogs(p) {
       return;
     }
 
-    const prevSig = signature(state.modal.data);
-    const newSig = signature(next);
+    const prev = state.modal.data;
     state.modal.data = next;
 
-    // If the user is selecting/copying text, don't repaint — their selection
-    // would vanish. We'll try again next tick.
-    if (hasSelectionInModal()) return;
+    // Full render only when structure changed (first mount, kind flip, new
+    // service appeared). Otherwise patch in place — no DOM churn, no
+    // selection loss, no scroll jump.
+    const structureChanged = !prev
+      || prev.kind !== next.kind
+      || (next.kind === 'build' && !canPatch(next));
 
-    // No visible change → no-op. Saves a repaint and keeps scroll position.
-    if (prevSig === newSig && prevSig !== '') return;
-
-    render();
+    if (structureChanged) {
+      render();
+    } else {
+      patch(next);
+    }
 
     if (isTerminal(next) && state.modal._timer) {
       clearInterval(state.modal._timer);
@@ -609,9 +676,6 @@ async function actionViewLogs(p) {
   };
 
   await refresh();
-  // First render after the initial fetch so the user sees something
-  // immediately even if nothing changed since open.
-  if (state.modal && state.modal.data) render();
   state.modal._timer = setInterval(refresh, 2500);
 }
 
@@ -968,26 +1032,63 @@ function viewModal() {
       render();
     };
 
+    const copyText = async (text, btn) => {
+      try {
+        await navigator.clipboard.writeText(text || '');
+        const prev = btn.textContent;
+        btn.textContent = 'copié';
+        btn.classList.add('ok');
+        setTimeout(() => { btn.textContent = prev; btn.classList.remove('ok'); }, 1200);
+      } catch (_) {
+        showToast('Clipboard refusé', 'error');
+      }
+    };
+
+    const copyBtn = (getText) => h('button', {
+      class: 'copy-btn',
+      onClick: (e) => copyText(getText(), e.currentTarget),
+      title: 'Copier',
+    }, 'copier');
+
     let body;
     if (err && !data) {
       body = h('div', { class: 'state' }, h('div', { class: 'title' }, 'Erreur'), h('div', { class: 'sub' }, err));
     } else if (!data) {
       body = h('div', { class: 'state' }, h('div', { class: 'spinner' }), h('div', { class: 'title' }, 'Chargement des logs…'));
     } else if (data.kind === 'runtime') {
-      body = h('div', { class: 'logs' }, data.logs || '(vide)');
+      body = h('div', { class: 'log-block', 'data-role': 'runtime' },
+        h('div', { class: 'log-block-head' },
+          h('span', { class: 'mono' }, 'runtime'),
+          copyBtn(() => state.modal?.data?.logs || ''),
+        ),
+        h('div', { class: 'logs', 'data-role': 'runtime-logs' }, data.logs || '(vide)'),
+      );
     } else if (data.kind === 'build') {
       const services = data.services || [];
       if (!services.length) {
         body = h('div', { class: 'state' }, h('div', { class: 'sub' }, 'Pas de logs de build.'));
       } else {
         body = h('div', { class: 'build-logs' },
-          ...services.map((svc) => h('div', { class: 'build-svc' },
+          ...services.map((svc) => h('div', { class: 'build-svc', 'data-service': svc.service },
             h('div', { class: 'build-svc-head' },
               h('span', { class: 'mono' }, svc.service),
-              h('span', { class: 'badge ' + (svc.status === 'success' ? 'running' : svc.status === 'failed' ? 'failed' : 'building') }, svc.status),
+              h('div', { class: 'row-right' },
+                h('span', {
+                  class: 'badge ' + (svc.status === 'success' ? 'running' : svc.status === 'failed' ? 'failed' : 'building'),
+                  'data-role': 'status',
+                }, svc.status),
+                copyBtn(() => {
+                  const cur = (state.modal?.data?.services || []).find((s) => s.service === svc.service);
+                  return cur?.output || '';
+                }),
+              ),
             ),
-            svc.error ? h('div', { class: 'build-err' }, svc.error) : null,
-            h('div', { class: 'logs' }, svc.output || '(stream vide)'),
+            h('div', {
+              class: 'build-err',
+              'data-role': 'error',
+              style: svc.error ? '' : 'display:none',
+            }, svc.error || ''),
+            h('div', { class: 'logs', 'data-role': 'output' }, svc.output || '(stream vide)'),
           )),
         );
       }
@@ -996,11 +1097,11 @@ function viewModal() {
     }
 
     const kindTag = data?.kind
-      ? h('span', { class: 'sub', style: 'margin-left:8px;opacity:0.7' }, data.kind === 'build' ? 'build logs' : 'runtime logs')
+      ? h('span', { class: 'sub kind-tag', style: 'margin-left:8px;opacity:0.7' }, data.kind === 'build' ? 'build logs' : 'runtime logs')
       : null;
 
     return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) closeModal(); } },
-      h('div', { class: 'modal' },
+      h('div', { class: 'modal', 'data-modal': 'logs' },
         h('div', { class: 'modal-head' },
           h('div', {},
             h('h3', {}, `Logs — ${preview.repo_full_name} #${preview.pr_number}`, kindTag),
