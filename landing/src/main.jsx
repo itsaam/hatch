@@ -5,8 +5,8 @@ import AdminPage from './admin/AdminPage.jsx'
 import './styles/tokens.css'
 import './styles/global.css'
 
-const isAdmin = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')
+const isApp = typeof window !== 'undefined' && window.location.pathname.startsWith('/app')
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  isAdmin ? <AdminPage /> : <App />,
+  isApp ? <AdminPage /> : <App />,
 )
