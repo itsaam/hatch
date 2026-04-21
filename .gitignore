@@ -39,8 +39,8 @@ cli/dist/
 core/api/secrets/
 *.pem
 
-# Claude Code local state — on track uniquement la mémoire partagée,
-# tout le reste (scheduled_tasks, cache, etc.) reste local.
-.claude/*
-!.claude/memory/
-!.claude/memory/**
+# Claude Code local state (privé, jamais committé)
+.claude/
+
+# Notes perso : TODO, product brief, drafts internes
+.notes/
