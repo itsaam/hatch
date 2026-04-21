@@ -3,11 +3,13 @@ import Section from '../components/Section.jsx'
 const items = [
   { s: 'done', t: 'Concept validé' },
   { s: 'done', t: 'Architecture définie' },
-  { s: 'wip', t: 'Control plane' },
-  { s: 'todo', t: 'Webhook GitHub handler' },
-  { s: 'todo', t: 'Docker SDK integration' },
-  { s: 'todo', t: 'Traefik routing dynamique' },
-  { s: 'todo', t: 'Dashboard' },
+  { s: 'done', t: 'Control plane' },
+  { s: 'done', t: 'Webhook GitHub handler' },
+  { s: 'done', t: 'Docker orchestration' },
+  { s: 'done', t: 'Traefik routing dynamique' },
+  { s: 'done', t: 'Bot GitHub App (comments PR)' },
+  { s: 'done', t: 'Cleanup auto (TTL + reconcile)' },
+  { s: 'wip', t: 'Dashboard' },
   { s: 'todo', t: 'Beta privée' }
 ]
 
