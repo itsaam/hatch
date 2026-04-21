@@ -195,8 +195,19 @@ func (d *Deployer) pruneOldImagesForStack(ctx context.Context, slug string, pr i
 	return nil
 }
 
-func (d *Deployer) build(ctx context.Context, repo, sha, tag string) error {
-	remote := fmt.Sprintf("https://github.com/%s.git#%s", repo, sha)
+func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installationID int64) error {
+	// For private repos, embed the installation token in the clone URL so
+	// the Docker daemon can fetch the tree without prompting.
+	// Public repos still work with the plain URL.
+	authPrefix := ""
+	if d.app != nil && installationID != 0 {
+		if tok, err := d.app.installationToken(ctx, installationID); err == nil {
+			authPrefix = "x-access-token:" + tok + "@"
+		} else {
+			log.Printf("build %s: installation token unavailable, trying unauth clone: %v", repo, err)
+		}
+	}
+	remote := fmt.Sprintf("https://%sgithub.com/%s.git#%s", authPrefix, repo, sha)
 	q := url.Values{}
 	q.Set("remote", remote)
 	q.Set("t", tag)
