@@ -54,7 +54,7 @@ func listPreviewsHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		defer cancel()
 
 		rows, err := pool.Query(ctx, `
-			SELECT repo_full_name, pr_number, branch, commit_sha, status, url,
+			SELECT repo_full_name, pr_number, branch, commit_sha, status, COALESCE(url, ''),
 			       updated_at, created_at,
 			       COALESCE(installation_id, 0), COALESCE(comment_id, 0)
 			FROM previews
