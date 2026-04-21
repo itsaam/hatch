@@ -545,11 +545,23 @@ function actionStop(p) {
     message: `Stopper ${p.repo_full_name} #${p.pr_number} ?\n\nContainers, network et DB seront supprimés.`,
     danger: true,
     onConfirm: async () => {
+      // Optimistic update: retire la row tout de suite.
+      const snapshot = state.previews ? [...state.previews] : null;
+      if (state.previews) {
+        state.previews = state.previews.filter(x =>
+          !(x.repo_full_name === p.repo_full_name && x.pr_number === p.pr_number)
+        );
+        render();
+      }
       try {
         await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}`, { method: 'DELETE' });
         showToast('Preview détruite', 'success');
-        await loadPreviews();
+        // Sync final (au cas où d'autres previews auraient changé entre-temps).
+        loadPreviews();
       } catch (e) {
+        // Rollback si la requête a échoué.
+        state.previews = snapshot;
+        render();
         showToast('Stop failed: ' + e.message, 'error');
       }
     },
