@@ -302,6 +302,8 @@ footer.foot a { color: var(--text-mute); }
         <tr><td><code>${SHA}</code></td><td><code>a1b2c3d</code></td><td>Commit SHA court (7 chars)</td></tr>
         <tr><td><code>${REPO}</code></td><td><code>itsaam-hatch-demo-node</code></td><td>Slug du repo</td></tr>
         <tr><td><code>${DB_PASSWORD}</code></td><td><code>9f3a7e...</code></td><td>Dérivé déterministe HMAC. Stable entre redeploys de la même PR, différent par PR.</td></tr>
+        <tr><td><code>${PREVIEW_HOST}</code></td><td><code>pr-42-my-app.hatchpr.dev</code></td><td>Hostname complet de la preview (sans protocole).</td></tr>
+        <tr><td><code>${PREVIEW_URL}</code></td><td><code>https://pr-42-my-app.hatchpr.dev</code></td><td>URL complète HTTPS. Pratique pour NEXTAUTH_URL / APP_URL.</td></tr>
       </tbody>
     </table>
 

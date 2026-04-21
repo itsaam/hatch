@@ -139,6 +139,7 @@ type SubstitutionContext struct {
 	Repo       string // raw "owner/repo"
 	Slug       string // sanitized slug
 	DBPassword string
+	Domain     string // e.g. "hatchpr.dev", used to derive PREVIEW_URL / PREVIEW_HOST
 }
 
 // DeriveDBPassword builds a deterministic per-PR DB password.
@@ -184,6 +185,16 @@ func substituteString(s string, sctx SubstitutionContext) string {
 			return sctx.Slug
 		case "DB_PASSWORD":
 			return sctx.DBPassword
+		case "PREVIEW_HOST":
+			if sctx.Domain == "" {
+				return match
+			}
+			return fmt.Sprintf("pr-%d-%s.%s", sctx.PR, sctx.Slug, sctx.Domain)
+		case "PREVIEW_URL":
+			if sctx.Domain == "" {
+				return match
+			}
+			return fmt.Sprintf("https://pr-%d-%s.%s", sctx.PR, sctx.Slug, sctx.Domain)
 		default:
 			return match
 		}

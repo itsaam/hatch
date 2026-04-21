@@ -75,6 +75,7 @@ func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *Comp
 		Repo:       ref.Repo,
 		Slug:       slug,
 		DBPassword: DeriveDBPassword(webhookSecretFromEnv(), ref.Repo, ref.PR),
+		Domain:     d.domain,
 	}
 	Substitute(spec, sctx)
 
