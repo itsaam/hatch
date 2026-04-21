@@ -49,10 +49,14 @@ export default function EmailCapture({ size = 'md' }) {
     }}>
       <input
         type="email"
+        name="email"
+        id="email"
+        autoComplete="email"
         placeholder="ton@email.dev"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
         required
+        aria-label="Email"
         style={{
           flex: 1, padding: big ? '16px 14px' : '12px 12px',
           fontSize: big ? 16 : 14, color: 'var(--text)'
