@@ -1,1 +1,2 @@
 - [Hatch deploy on sunny](project_deploy.md) — SSH commands pour rebuild + redeploy après push
+- [CLI `hatch init`](cli_hatch_init.md) — binaire Go qui scaffold un .hatch.yml auto-détecté
