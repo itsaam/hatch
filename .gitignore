@@ -31,10 +31,16 @@ pnpm-debug.log*
 # Go
 core/api/api
 core/api/vendor/
+cli/hatch
+cli/cli
+cli/dist/
 
 # Secrets
 core/api/secrets/
 *.pem
 
-# Claude Code local state
-.claude/
+# Claude Code local state — on track uniquement la mémoire partagée,
+# tout le reste (scheduled_tasks, cache, etc.) reste local.
+.claude/*
+!.claude/memory/
+!.claude/memory/**

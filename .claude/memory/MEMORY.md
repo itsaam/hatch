@@ -1,0 +1,1 @@
+- [Hatch deploy on sunny](project_deploy.md) — SSH commands pour rebuild + redeploy après push
