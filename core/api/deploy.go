@@ -229,12 +229,23 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installatio
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("build http %d: %s", resp.StatusCode, truncate(string(body), 500))
+		return fmt.Errorf("build http %d: %s", resp.StatusCode, truncateTail(string(body), 800))
 	}
-	if bytes.Contains(body, []byte(`"error"`)) {
-		return fmt.Errorf("build stream error: %s", truncate(string(body), 500))
+	// Docker streams one JSON object per line. Errors appear as
+	// {"errorDetail":{...},"error":"..."} — more specific than just "error".
+	if bytes.Contains(body, []byte(`"errorDetail"`)) {
+		return fmt.Errorf("build stream error: %s", truncateTail(string(body), 1200))
 	}
 	return nil
+}
+
+// truncateTail keeps the last n chars — Docker build errors are typically
+// at the END of the stream, not the beginning.
+func truncateTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }
 
 // restartPolicy is the Docker HostConfig.RestartPolicy shape used by the
