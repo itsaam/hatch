@@ -213,6 +213,7 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installatio
 	q.Set("t", tag)
 	q.Set("q", "1")
 	q.Set("forcerm", "1")
+	q.Set("nocache", "1")  // avoid cross-PR cache layer conflicts — prioritise correctness over speed
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		d.dockerURL("/build?"+q.Encode()),
