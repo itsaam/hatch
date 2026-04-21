@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,6 +52,12 @@ type Deployer struct {
 	notifier   StatusNotifier
 	dockerBase string // e.g. "http://docker"; tests override this.
 	app        *AppClient
+
+	// locks serializes concurrent Deploy() calls for the same (repo, pr) so
+	// two near-simultaneous webhooks (e.g. reopen + synchronize) don't race
+	// on container names or the per-PR network.
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex
 }
 
 // SetAppClient wires the GitHub App client used to fetch `.hatch.yml` and
@@ -68,6 +75,7 @@ func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) 
 	return &Deployer{
 		http:       &http.Client{Transport: tr, Timeout: 15 * time.Minute},
 		httpExt:    &http.Client{Timeout: 30 * time.Second},
+		locks:      make(map[string]*sync.Mutex),
 		pool:       pool,
 		network:    netName,
 		domain:     domain,
@@ -90,7 +98,24 @@ func (d *Deployer) SetNotifier(n StatusNotifier) {
 	d.notifier = n
 }
 
+// lockFor returns a mutex unique to (repo, pr). Created lazily on first use.
+func (d *Deployer) lockFor(repo string, pr int) *sync.Mutex {
+	key := fmt.Sprintf("%s#%d", repo, pr)
+	d.locksMu.Lock()
+	defer d.locksMu.Unlock()
+	m, ok := d.locks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		d.locks[key] = m
+	}
+	return m
+}
+
 func (d *Deployer) Deploy(ref PreviewRef) {
+	lock := d.lockFor(ref.Repo, ref.PR)
+	lock.Lock()
+	defer lock.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -128,6 +153,10 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 }
 
 func (d *Deployer) Destroy(ref PreviewRef) {
+	lock := d.lockFor(ref.Repo, ref.PR)
+	lock.Lock()
+	defer lock.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 	slug := slugify(ref.Repo)
