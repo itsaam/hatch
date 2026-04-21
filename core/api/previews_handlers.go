@@ -241,6 +241,18 @@ func previewDestroyHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerF
 
 		// Destroy owns its own 1-minute context internally.
 		deployer.Destroy(ref)
+
+		// Hard-delete the DB row so the preview disappears from the dashboard
+		// list. Webhook-driven closes keep the row (status='closed') for
+		// history; manual admin deletes want a clean removal.
+		delCtx, delCancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer delCancel()
+		if _, err := pool.Exec(delCtx,
+			`DELETE FROM previews WHERE repo_full_name=$1 AND pr_number=$2`,
+			repo, pr); err != nil {
+			log.Printf("destroy delete row %s#%d: %v", repo, pr, err)
+		}
+
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
