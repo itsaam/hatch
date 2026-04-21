@@ -11,6 +11,7 @@ export default function RevealText({ children, as: Tag = 'h2', className, style,
     const el = ref.current
     if (!el) return
     const words = el.querySelectorAll('.word > span')
+    if (!words.length) return
 
     gsap.set(words, { yPercent: 110, opacity: 0 })
 

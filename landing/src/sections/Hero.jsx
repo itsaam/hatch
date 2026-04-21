@@ -17,17 +17,23 @@ export default function Hero({ ready }) {
   }, [])
 
   useEffect(() => {
-    if (!ready) return
-    const words = titleRef.current?.querySelectorAll('.w > span')
-    gsap.set(words, { yPercent: 110, opacity: 0 })
-    gsap.set([subRef.current, '.hero-form', '.hero-meta', '.hero-tags'], { y: 24, opacity: 0 })
+    if (!ready || !titleRef.current) return
 
-    const tl = gsap.timeline({ delay: 0.2 })
-    tl.to(words, { yPercent: 0, opacity: 1, duration: 1.2, ease: 'expo.out', stagger: 0.05 })
-      .to(subRef.current, { y: 0, opacity: 1, duration: 0.9, ease: 'expo.out' }, '-=0.6')
-      .to('.hero-form', { y: 0, opacity: 1, duration: 0.7, ease: 'expo.out' }, '-=0.5')
-      .to('.hero-meta', { y: 0, opacity: 1, duration: 0.6, ease: 'expo.out' }, '-=0.4')
-      .to('.hero-tags', { y: 0, opacity: 1, duration: 0.6, ease: 'expo.out' }, '-=0.4')
+    const ctx = gsap.context(() => {
+      const words = titleRef.current.querySelectorAll('.w > span')
+      if (!words.length) return
+      gsap.set(words, { yPercent: 110, opacity: 0 })
+      gsap.set([subRef.current, '.hero-form', '.hero-meta', '.hero-tags'], { y: 24, opacity: 0 })
+
+      const tl = gsap.timeline({ delay: 0.2 })
+      tl.to(words, { yPercent: 0, opacity: 1, duration: 1.2, ease: 'expo.out', stagger: 0.05 })
+        .to(subRef.current, { y: 0, opacity: 1, duration: 0.9, ease: 'expo.out' }, '-=0.6')
+        .to('.hero-form', { y: 0, opacity: 1, duration: 0.7, ease: 'expo.out' }, '-=0.5')
+        .to('.hero-meta', { y: 0, opacity: 1, duration: 0.6, ease: 'expo.out' }, '-=0.4')
+        .to('.hero-tags', { y: 0, opacity: 1, duration: 0.6, ease: 'expo.out' }, '-=0.4')
+    }, titleRef)
+
+    return () => ctx.revert()
   }, [ready])
 
   const words = ['Chaque', 'PR', 'éclot', 'en', 'preview', 'live,']
