@@ -127,7 +127,6 @@ table.previews { width: 100%; border-collapse: collapse; }
   color: var(--text-faint); font-weight: 500;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border-strong);
-  position: sticky; top: 64px;
 }
 .previews tbody tr { transition: background .15s ease; }
 .previews tbody tr:hover { background: var(--surface-2); }
@@ -181,7 +180,33 @@ table.previews { width: 100%; border-collapse: collapse; }
 }
 .btn-icon:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
 .btn-icon.danger:hover { color: var(--red); border-color: rgba(229,115,115,0.4); background: rgba(229,115,115,0.06); }
+.btn-icon.disabled { color: var(--text-faint); opacity: 0.4; pointer-events: none; }
 .btn-icon svg { width: 14px; height: 14px; }
+
+/* ---------- toasts ---------- */
+.toast-stack {
+  position: fixed; right: 24px; bottom: 24px; z-index: 200;
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  padding: 12px 18px; border-radius: 10px;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border-strong);
+  font-size: 14px; font-weight: 500;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  animation: toast-in .25s ease;
+  max-width: 380px;
+}
+.toast.success { border-color: rgba(127,217,156,0.4); color: var(--green); }
+.toast.error { border-color: rgba(229,115,115,0.4); color: var(--red); }
+.toast.info { border-color: var(--border-strong); }
+@keyframes toast-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -353,6 +378,7 @@ const state = {
   secretsErr: null,
   secretsRepo: '',
   modal: null,            // { type, ... }
+  toasts: [],             // [{ id, message, kind }]
 };
 
 // ---------- api ----------
@@ -422,6 +448,7 @@ function shortSha(sha) { return (sha || '').slice(0, 7); }
 function svgIcon(name) {
   const icons = {
     open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+    github: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.28-.01-1.24-.02-2.25-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.09 1.83 1.23 1.83 1.23 1.07 1.83 2.81 1.3 3.49.99.11-.77.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.12-.3-.54-1.52.12-3.16 0 0 1.01-.32 3.3 1.23a11.46 11.46 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.64.25 2.86.12 3.16.77.84 1.23 1.91 1.23 3.22 0 4.61-2.8 5.63-5.48 5.93.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.7.83.58C20.56 22.29 24 17.8 24 12.5 24 5.87 18.63.5 12 .5z"/></svg>',
     logs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>',
     redeploy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>',
     stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
@@ -467,6 +494,22 @@ async function loadSecrets() {
   render();
 }
 
+// ---------- confirm + toast helpers ----------
+function showConfirm({ title, message, danger, onConfirm }) {
+  state.modal = { type: 'confirm', title, message, danger: !!danger, onConfirm };
+  render();
+}
+
+function showToast(message, kind = 'info') {
+  const id = Math.random().toString(36).slice(2, 8);
+  state.toasts.push({ id, message, kind });
+  render();
+  setTimeout(() => {
+    state.toasts = state.toasts.filter(t => t.id !== id);
+    render();
+  }, kind === 'error' ? 5000 : 3000);
+}
+
 // ---------- actions ----------
 async function actionViewLogs(p) {
   state.modal = { type: 'logs', preview: p, logs: null, err: null };
@@ -480,34 +523,54 @@ async function actionViewLogs(p) {
   render();
 }
 
-async function actionRedeploy(p) {
-  if (!confirm(`Redeploy ${p.repo_full_name} #${p.pr_number} ?`)) return;
-  try {
-    await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}/redeploy`, { method: 'POST' });
-    await loadPreviews();
-  } catch (e) {
-    alert('Redeploy failed: ' + e.message);
-  }
+function actionRedeploy(p) {
+  showConfirm({
+    title: 'Redeploy',
+    message: `Relancer le deploy de ${p.repo_full_name} #${p.pr_number} ?`,
+    onConfirm: async () => {
+      try {
+        await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}/redeploy`, { method: 'POST' });
+        showToast('Redeploy lancé', 'success');
+        await loadPreviews();
+      } catch (e) {
+        showToast('Redeploy failed: ' + e.message, 'error');
+      }
+    },
+  });
 }
 
-async function actionStop(p) {
-  if (!confirm(`Stop & destroy ${p.repo_full_name} #${p.pr_number} ?\n\nContainers, network et DB seront supprimés.`)) return;
-  try {
-    await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}`, { method: 'DELETE' });
-    await loadPreviews();
-  } catch (e) {
-    alert('Stop failed: ' + e.message);
-  }
+function actionStop(p) {
+  showConfirm({
+    title: 'Stop & destroy',
+    message: `Stopper ${p.repo_full_name} #${p.pr_number} ?\n\nContainers, network et DB seront supprimés.`,
+    danger: true,
+    onConfirm: async () => {
+      try {
+        await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}`, { method: 'DELETE' });
+        showToast('Preview détruite', 'success');
+        await loadPreviews();
+      } catch (e) {
+        showToast('Stop failed: ' + e.message, 'error');
+      }
+    },
+  });
 }
 
-async function actionDeleteSecret(name) {
-  if (!confirm(`Supprimer le secret "${name}" pour ${state.secretsRepo} ?`)) return;
-  try {
-    await api(`/api/secrets?repo=${encodeURIComponent(state.secretsRepo)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-    await loadSecrets();
-  } catch (e) {
-    alert('Delete failed: ' + e.message);
-  }
+function actionDeleteSecret(name) {
+  showConfirm({
+    title: 'Supprimer le secret',
+    message: `Supprimer "${name}" pour ${state.secretsRepo} ?`,
+    danger: true,
+    onConfirm: async () => {
+      try {
+        await api(`/api/secrets?repo=${encodeURIComponent(state.secretsRepo)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        showToast('Secret supprimé', 'success');
+        await loadSecrets();
+      } catch (e) {
+        showToast('Delete failed: ' + e.message, 'error');
+      }
+    },
+  });
 }
 
 async function actionAddSecret(name, value) {
@@ -517,9 +580,10 @@ async function actionAddSecret(name, value) {
       body: JSON.stringify({ repo: state.secretsRepo, name, value }),
     });
     state.modal = null;
+    showToast('Secret ajouté', 'success');
     await loadSecrets();
   } catch (e) {
-    alert('Add failed: ' + e.message);
+    showToast('Add failed: ' + e.message, 'error');
   }
 }
 
@@ -588,7 +652,7 @@ function viewTopBar() {
       }, 'Secrets'),
       h('button', {
         onClick: () => {
-          if (!confirm('Se déconnecter ?')) return;
+          if (!window.confirm('Se déconnecter ?')) return; // logout is terminal, keep native
           localStorage.removeItem(TOKEN_KEY);
           state.token = ''; state.previews = null; state.secrets = null;
           render();
@@ -663,9 +727,16 @@ function viewPreviews() {
         h('td', { class: 'when hide-sm' }, timeAgo(p.updated_at || p.created_at)),
         h('td', {},
           h('div', { class: 'actions' },
-            p.url && h('a', {
-              href: p.url, target: '_blank', rel: 'noopener',
-              class: 'btn-icon', title: 'Open preview', html: svgIcon('open'),
+            p.url
+              ? h('a', {
+                  href: p.url, target: '_blank', rel: 'noopener',
+                  class: 'btn-icon', title: 'Open preview', html: svgIcon('open'),
+                })
+              : h('span', { class: 'btn-icon disabled', title: 'No preview URL', html: svgIcon('open') }),
+            h('a', {
+              href: `https://github.com/${p.repo_full_name}/pull/${p.pr_number}`,
+              target: '_blank', rel: 'noopener',
+              class: 'btn-icon', title: 'Open GitHub PR', html: svgIcon('github'),
             }),
             h('button', {
               class: 'btn-icon', title: 'View logs',
@@ -842,7 +913,45 @@ function viewModal() {
       ),
     );
   }
+
+  if (state.modal.type === 'confirm') {
+    const { title, message, danger, onConfirm } = state.modal;
+    const close = () => { state.modal = null; render(); };
+    const confirm = async () => { close(); if (onConfirm) await onConfirm(); };
+    return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
+      h('div', { class: 'modal sm' },
+        h('div', { class: 'modal-head' },
+          h('div', {},
+            h('h3', {}, title || 'Confirmer'),
+          ),
+          h('button', { class: 'btn-icon', onClick: close, html: svgIcon('close') }),
+        ),
+        h('div', { class: 'modal-body' },
+          h('p', { style: 'margin: 0; white-space: pre-wrap; line-height: 1.55;' }, message || ''),
+        ),
+        h('div', { class: 'modal-foot' },
+          h('button', { type: 'button', class: 'btn', onClick: close }, 'Annuler'),
+          h('button', {
+            type: 'button',
+            class: danger ? 'btn danger' : 'btn primary',
+            onClick: confirm,
+            autofocus: true,
+          }, danger ? 'Confirmer la suppression' : 'Confirmer'),
+        ),
+      ),
+    );
+  }
+
   return null;
+}
+
+function viewToasts() {
+  if (!state.toasts.length) return null;
+  return h('div', { class: 'toast-stack' },
+    ...state.toasts.map(t =>
+      h('div', { class: 'toast ' + t.kind }, t.message),
+    ),
+  );
 }
 
 // ---------- render ----------
@@ -861,6 +970,9 @@ function render() {
 
   const modal = viewModal();
   if (modal) root.appendChild(modal);
+
+  const toasts = viewToasts();
+  if (toasts) root.appendChild(toasts);
 }
 
 // ESC to close modal
