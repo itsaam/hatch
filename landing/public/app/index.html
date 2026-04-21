@@ -515,7 +515,7 @@ async function actionViewLogs(p) {
   state.modal = { type: 'logs', preview: p, logs: null, err: null };
   render();
   try {
-    const data = await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}/logs`);
+    const data = await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}/logs`);
     state.modal.logs = typeof data === 'string' ? data : (data.logs || '');
   } catch (e) {
     state.modal.err = e.message;
@@ -529,7 +529,7 @@ function actionRedeploy(p) {
     message: `Relancer le deploy de ${p.repo_full_name} #${p.pr_number} ?`,
     onConfirm: async () => {
       try {
-        await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}/redeploy`, { method: 'POST' });
+        await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}/redeploy`, { method: 'POST' });
         showToast('Redeploy lancé', 'success');
         await loadPreviews();
       } catch (e) {
@@ -546,7 +546,7 @@ function actionStop(p) {
     danger: true,
     onConfirm: async () => {
       try {
-        await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}`, { method: 'DELETE' });
+        await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}`, { method: 'DELETE' });
         showToast('Preview détruite', 'success');
         await loadPreviews();
       } catch (e) {
