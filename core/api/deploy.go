@@ -73,7 +73,10 @@ func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) 
 		},
 	}
 	return &Deployer{
-		http:       &http.Client{Transport: tr, Timeout: 15 * time.Minute},
+		// Timeout=0 : request lifetime is bound by the caller's context,
+		// which is sized per operation (25min for deploys, 1min for destroys).
+		// A client-level timeout would just add a second deadline to debug.
+		http:       &http.Client{Transport: tr},
 		httpExt:    &http.Client{Timeout: 30 * time.Second},
 		locks:      make(map[string]*sync.Mutex),
 		pool:       pool,
@@ -230,26 +233,40 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installatio
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("build http %d: %s", resp.StatusCode, truncateTail(string(body), 800))
+		return fmt.Errorf("build http %d: %s", resp.StatusCode, scrubString(truncateTail(string(body), 800)))
 	}
 	// Docker streams one JSON object per line. Errors appear as
 	// {"errorDetail":{...},"error":"..."} — more specific than just "error".
 	if bytes.Contains(body, []byte(`"errorDetail"`)) {
-		return fmt.Errorf("build stream error: %s", truncateTail(string(body), 1200))
+		return fmt.Errorf("build stream error: %s", scrubString(truncateTail(string(body), 1200)))
 	}
 	return nil
 }
 
-// scrubToken redacts `x-access-token:ghs_...@github.com` credentials from
-// error strings so tokens don't leak into logs.
-var tokenRE = regexp.MustCompile(`x-access-token:[^@]+@`)
+// scrubToken redacts GitHub credentials from error strings so tokens never
+// leak into logs. Handles:
+//   - plain clone URLs:      x-access-token:ghs_XXX@github.com
+//   - URL-encoded URLs:      x-access-token%3Aghs_XXX%40github.com
+//     (Go's http.Client surfaces this form when wrapping errors)
+//   - raw token tokens in prose: ghs_XXX, ghu_XXX, gho_XXX, github_pat_XXX
+var scrubREs = []*regexp.Regexp{
+	regexp.MustCompile(`x-access-token[:%]3?[Aa]?[^@%]+(?:@|%40)`),
+	regexp.MustCompile(`gh[suo]_[A-Za-z0-9]{16,}`),
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
+}
 
 func scrubToken(err error) error {
 	if err == nil {
 		return nil
 	}
-	s := tokenRE.ReplaceAllString(err.Error(), "x-access-token:REDACTED@")
-	return errors.New(s)
+	return errors.New(scrubString(err.Error()))
+}
+
+func scrubString(s string) string {
+	for _, re := range scrubREs {
+		s = re.ReplaceAllString(s, "REDACTED")
+	}
+	return s
 }
 
 // truncateTail keeps the last n chars — Docker build errors are typically
