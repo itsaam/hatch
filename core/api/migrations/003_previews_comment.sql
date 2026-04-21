@@ -1,0 +1,2 @@
+ALTER TABLE previews ADD COLUMN IF NOT EXISTS installation_id BIGINT;
+ALTER TABLE previews ADD COLUMN IF NOT EXISTS comment_id BIGINT;

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,9 @@ var migrationSubscribers string
 
 //go:embed migrations/002_previews.sql
 var migrationPreviews string
+
+//go:embed migrations/003_previews_comment.sql
+var migrationPreviewsComment string
 
 const maxEmailLen = 254
 
@@ -49,7 +53,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
@@ -59,6 +63,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("deployer init: %v", err)
 	}
+
+	var appClient *AppClient
+	if strings.EqualFold(getenv("GITHUB_APP_ENABLED", "false"), "true") {
+		appIDStr := mustEnv("GITHUB_APP_ID")
+		appID, err := strconv.ParseInt(appIDStr, 10, 64)
+		if err != nil {
+			log.Fatalf("invalid GITHUB_APP_ID: %v", err)
+		}
+		pemPath := getenv("GITHUB_APP_PRIVATE_KEY_PATH", "/app/secrets/github-app.pem")
+		appClient, err = NewAppClient(appID, pemPath)
+		if err != nil {
+			log.Fatalf("github app init: %v", err)
+		}
+		log.Printf("github app integration enabled (app_id=%d)", appID)
+	} else {
+		log.Printf("github app integration disabled")
+	}
+
+	deployer.SetNotifier(&prNotifier{pool: pool, app: appClient})
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -85,7 +108,7 @@ func main() {
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
-	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer))
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient))
 
 	srv := &http.Server{
 		Addr:              ":" + port,

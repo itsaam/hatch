@@ -68,6 +68,9 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      GITHUB_APP_ENABLED: ${GITHUB_APP_ENABLED:-true}
+      GITHUB_APP_ID: ${GITHUB_APP_ID}
+      GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-app.pem
       HATCH_NETWORK: hatch_public
       HATCH_DOMAIN: ${HATCH_DOMAIN:-localhost}
       PORT: "8080"
@@ -75,6 +78,7 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./core/api/secrets:/app/secrets:ro
 
 networks:
   default:

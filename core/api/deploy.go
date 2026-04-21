@@ -20,11 +20,33 @@ import (
 
 const dockerAPIVersion = "v1.43"
 
+// PreviewRef carries enough context for status callbacks (PR comment updates).
+type PreviewRef struct {
+	Repo           string
+	PR             int
+	Branch         string
+	SHA            string
+	InstallationID int64
+	CommentID      int64
+}
+
+// StatusNotifier is called by the deployer when a preview status transitions.
+// Implementations MUST NOT block the deploy loop for long; they may run in a
+// goroutine if they do remote I/O.
+type StatusNotifier interface {
+	OnStatusChange(ctx context.Context, ref PreviewRef, status, publicURL string)
+}
+
+type noopNotifier struct{}
+
+func (noopNotifier) OnStatusChange(context.Context, PreviewRef, string, string) {}
+
 type Deployer struct {
-	http    *http.Client
-	pool    *pgxpool.Pool
-	network string
-	domain  string
+	http     *http.Client
+	pool     *pgxpool.Pool
+	network  string
+	domain   string
+	notifier StatusNotifier
 }
 
 func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) {
@@ -35,29 +57,39 @@ func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) 
 		},
 	}
 	return &Deployer{
-		http:    &http.Client{Transport: tr, Timeout: 15 * time.Minute},
-		pool:    pool,
-		network: netName,
-		domain:  domain,
+		http:     &http.Client{Transport: tr, Timeout: 15 * time.Minute},
+		pool:     pool,
+		network:  netName,
+		domain:   domain,
+		notifier: noopNotifier{},
 	}, nil
 }
 
-func (d *Deployer) Deploy(repo string, pr int, branch, sha string) {
+// SetNotifier wires a status notifier. Nil is coerced to a no-op.
+func (d *Deployer) SetNotifier(n StatusNotifier) {
+	if n == nil {
+		d.notifier = noopNotifier{}
+		return
+	}
+	d.notifier = n
+}
+
+func (d *Deployer) Deploy(ref PreviewRef) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	slug := slugify(repo)
-	name := fmt.Sprintf("hatch-preview-%s-%d", slug, pr)
-	tag := fmt.Sprintf("%s:%s", name, shortSHA(sha))
-	host := fmt.Sprintf("pr-%d.%s.%s", pr, slug, d.domain)
+	slug := slugify(ref.Repo)
+	name := fmt.Sprintf("hatch-preview-%s-%d", slug, ref.PR)
+	tag := fmt.Sprintf("%s:%s", name, shortSHA(ref.SHA))
+	host := fmt.Sprintf("pr-%d.%s.%s", ref.PR, slug, d.domain)
 	publicURL := "http://" + host
 
 	log.Printf("deploy start: %s → %s", name, publicURL)
-	d.setStatus(ctx, repo, pr, "building", "")
+	d.setStatus(ctx, ref, "building", "")
 
-	if err := d.build(ctx, repo, sha, tag); err != nil {
+	if err := d.build(ctx, ref.Repo, ref.SHA, tag); err != nil {
 		log.Printf("build failed %s: %v", name, err)
-		d.setStatus(ctx, repo, pr, "failed", "")
+		d.setStatus(ctx, ref, "failed", "")
 		return
 	}
 
@@ -65,23 +97,24 @@ func (d *Deployer) Deploy(repo string, pr int, branch, sha string) {
 
 	if err := d.run(ctx, name, tag, host); err != nil {
 		log.Printf("run failed %s: %v", name, err)
-		d.setStatus(ctx, repo, pr, "failed", "")
+		d.setStatus(ctx, ref, "failed", "")
 		return
 	}
 
 	log.Printf("deploy ok: %s → %s", name, publicURL)
-	d.setStatus(ctx, repo, pr, "running", publicURL)
+	d.setStatus(ctx, ref, "running", publicURL)
 }
 
-func (d *Deployer) Destroy(repo string, pr int) {
+func (d *Deployer) Destroy(ref PreviewRef) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
-	name := fmt.Sprintf("hatch-preview-%s-%d", slugify(repo), pr)
+	name := fmt.Sprintf("hatch-preview-%s-%d", slugify(ref.Repo), ref.PR)
 	if err := d.remove(ctx, name); err != nil {
 		log.Printf("destroy %s: %v", name, err)
 		return
 	}
 	log.Printf("preview destroyed %s", name)
+	d.setStatus(ctx, ref, "closed", "")
 }
 
 func (d *Deployer) build(ctx context.Context, repo, sha, tag string) error {
@@ -116,12 +149,12 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string) error {
 }
 
 type createBody struct {
-	Image            string                      `json:"Image"`
-	Labels           map[string]string           `json:"Labels"`
-	HostConfig       hostConfig                  `json:"HostConfig"`
-	NetworkingConfig networkingConfig            `json:"NetworkingConfig"`
-	Env              []string                    `json:"Env,omitempty"`
-	ExposedPorts     map[string]struct{}         `json:"ExposedPorts,omitempty"`
+	Image            string              `json:"Image"`
+	Labels           map[string]string   `json:"Labels"`
+	HostConfig       hostConfig          `json:"HostConfig"`
+	NetworkingConfig networkingConfig    `json:"NetworkingConfig"`
+	Env              []string            `json:"Env,omitempty"`
+	ExposedPorts     map[string]struct{} `json:"ExposedPorts,omitempty"`
 }
 
 type hostConfig struct {
@@ -259,19 +292,22 @@ func (d *Deployer) remove(ctx context.Context, name string) error {
 	return fmt.Errorf("remove http %d: %s", resp.StatusCode, truncate(string(b), 200))
 }
 
-func (d *Deployer) setStatus(ctx context.Context, repo string, pr int, status, publicURL string) {
+func (d *Deployer) setStatus(ctx context.Context, ref PreviewRef, status, publicURL string) {
 	var err error
 	if publicURL == "" {
 		_, err = d.pool.Exec(ctx,
 			`UPDATE previews SET status=$1, updated_at=NOW() WHERE repo_full_name=$2 AND pr_number=$3`,
-			status, repo, pr)
+			status, ref.Repo, ref.PR)
 	} else {
 		_, err = d.pool.Exec(ctx,
 			`UPDATE previews SET status=$1, url=$2, updated_at=NOW() WHERE repo_full_name=$3 AND pr_number=$4`,
-			status, publicURL, repo, pr)
+			status, publicURL, ref.Repo, ref.PR)
 	}
 	if err != nil {
 		log.Printf("setStatus: %v", err)
+	}
+	if d.notifier != nil {
+		d.notifier.OnStatusChange(ctx, ref, status, publicURL)
 	}
 }
 

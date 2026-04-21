@@ -31,3 +31,7 @@ pnpm-debug.log*
 # Go
 core/api/api
 core/api/vendor/
+
+# Secrets
+core/api/secrets/
+*.pem
