@@ -415,7 +415,7 @@ func (d *Deployer) runSeed(ctx context.Context, app *AppClient, ref PreviewRef, 
 	cname := composeContainerName(slug, ref.PR, serviceName)
 	svc := spec.Services[serviceName]
 
-	data, err := fetchRepoFile(ctx, d.http, app, ref.InstallationID, ref.Repo, seed.SQL, ref.SHA)
+	data, err := fetchRepoFile(ctx, d.httpExt, app, ref.InstallationID, ref.Repo, seed.SQL, ref.SHA)
 	if err != nil {
 		return fmt.Errorf("fetch seed: %w", err)
 	}

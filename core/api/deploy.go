@@ -44,6 +44,7 @@ func (noopNotifier) OnStatusChange(context.Context, PreviewRef, string, string) 
 
 type Deployer struct {
 	http       *http.Client
+	httpExt    *http.Client // external (non-Docker) HTTP client, used for GitHub raw/contents fetches
 	pool       *pgxpool.Pool
 	network    string
 	domain     string
@@ -66,6 +67,7 @@ func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) 
 	}
 	return &Deployer{
 		http:       &http.Client{Transport: tr, Timeout: 15 * time.Minute},
+		httpExt:    &http.Client{Timeout: 30 * time.Second},
 		pool:       pool,
 		network:    netName,
 		domain:     domain,
@@ -99,7 +101,7 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 	log.Printf("deploy start: %s#%d → %s", ref.Repo, ref.PR, publicURL)
 	d.setStatus(ctx, ref, "building", "")
 
-	spec, hadFile, err := loadComposeForRef(ctx, d.http, d.app, ref.InstallationID, ref.Repo, ref.SHA)
+	spec, hadFile, err := loadComposeForRef(ctx, d.httpExt, d.app, ref.InstallationID, ref.Repo, ref.SHA)
 	if err != nil {
 		log.Printf("load .hatch.yml %s#%d: %v", ref.Repo, ref.PR, err)
 		d.setStatus(ctx, ref, "failed", "")
