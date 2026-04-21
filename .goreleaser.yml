@@ -4,7 +4,7 @@ project_name: hatch-cli
 
 before:
   hooks:
-    - go mod tidy
+    - sh -c "cd cli && go mod tidy"
 
 builds:
   - id: hatch
