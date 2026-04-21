@@ -159,6 +159,9 @@ func (d *Deployer) runComposeService(ctx context.Context, ref PreviewRef, spec *
 		"hatch.service": service,
 	}
 
+	// Docker refuses to create a container with >1 network endpoint. We attach
+	// only the per-PR network at creation time; the public traefik network
+	// (d.network) is connected after creation via /networks/{id}/connect.
 	endpoints := map[string]composeEndpoint{
 		networkName(slug, ref.PR): {Aliases: []string{service}},
 	}
@@ -172,8 +175,6 @@ func (d *Deployer) runComposeService(ctx context.Context, ref PreviewRef, spec *
 		labels[fmt.Sprintf("traefik.http.routers.%s.tls", routerID)] = "true"
 		labels[fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", routerID)] = "letsencrypt"
 		labels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", routerID)] = port
-		// Attach to the public traefik network so routing works.
-		endpoints[d.network] = composeEndpoint{}
 	}
 
 	env := make([]string, 0, len(svc.Env))
@@ -247,6 +248,14 @@ func (d *Deployer) runComposeService(ctx context.Context, ref PreviewRef, spec *
 		return errors.New("empty container id")
 	}
 
+	// Exposed service needs to join the public traefik network too. Connect
+	// it after create (Docker rejects multi-endpoint create payloads).
+	if service == exposed {
+		if err := d.connectNetwork(ctx, d.network, created.ID); err != nil {
+			return fmt.Errorf("connect %s to %s: %w", cname, d.network, err)
+		}
+	}
+
 	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		d.dockerURL("/containers/"+created.ID+"/start"), nil)
 	if err != nil {
@@ -308,6 +317,30 @@ func (d *Deployer) removeNetwork(ctx context.Context, name string) error {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("network remove http %d: %s", resp.StatusCode, truncate(string(b), 200))
+}
+
+// connectNetwork attaches an existing container to an existing network.
+// Docker returns 403 if already connected, which we treat as success.
+func (d *Deployer) connectNetwork(ctx context.Context, network, containerID string) error {
+	payload := map[string]any{"Container": containerID}
+	buf, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		d.dockerURL("/networks/"+url.PathEscape(network)+"/connect"),
+		bytes.NewReader(buf))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode < 400 {
+		return nil
+	}
+	b, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("connect http %d: %s", resp.StatusCode, truncate(string(b), 200))
 }
 
 func (d *Deployer) pullImage(ctx context.Context, image string) error {
