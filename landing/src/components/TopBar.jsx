@@ -11,7 +11,19 @@ export default function TopBar() {
       background: 'linear-gradient(180deg, rgba(15,13,10,0.7) 0%, rgba(15,13,10,0) 100%)'
     }}>
       <Logo />
-      <StatusPill />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+        <a href="/docs/" className="mono" style={{
+          fontSize: 12, letterSpacing: '0.08em',
+          color: 'var(--text-mute)', textTransform: 'uppercase',
+          padding: '6px 12px', borderRadius: 999,
+          border: '1px solid var(--border)',
+          transition: 'all .25s var(--ease)'
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--border-strong)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-mute)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+        >DOCS</a>
+        <StatusPill />
+      </div>
     </header>
   )
 }

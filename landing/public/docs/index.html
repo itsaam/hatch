@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs — Hatch</title>
+<meta name="description" content="Documentation Hatch : configuration .hatch.yml, variables, isolation par PR, exemples (Node, Python, Rails…).">
+<link rel="icon" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0F0D0A;
+  --surface: #161310;
+  --surface-2: #1D1915;
+  --text: #F5EFE6;
+  --text-mute: #A89D8A;
+  --text-faint: #6E6355;
+  --border: rgba(245, 239, 230, 0.08);
+  --border-strong: rgba(245, 239, 230, 0.16);
+  --accent: #FF7A3D;
+  --accent-2: #E9D8A6;
+  --font-display: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-serif: 'Instrument Serif', serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font-display); font-size: 15px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+code {
+  font-family: var(--font-mono); font-size: 0.86em;
+  background: var(--surface-2); padding: 2px 7px; border-radius: 5px;
+  color: var(--accent-2);
+}
+pre {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px 24px;
+  overflow-x: auto; line-height: 1.55;
+  font-family: var(--font-mono); font-size: 13px;
+  color: var(--text);
+}
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.k { color: #FFB37A; }     /* keys */
+.s { color: #E9D8A6; }     /* strings */
+.c { color: var(--text-faint); font-style: italic; } /* comments */
+.n { color: #BB9BFF; }     /* numbers */
+h1, h2, h3 { font-weight: 700; letter-spacing: -0.02em; margin-top: 0; }
+h1 { font-size: clamp(36px, 5vw, 56px); line-height: 1.05; margin-bottom: 8px; }
+h2 { font-size: clamp(24px, 3vw, 32px); margin-top: 60px; margin-bottom: 16px; }
+h3 { font-size: 18px; margin-top: 36px; margin-bottom: 10px; color: var(--accent-2); }
+p { margin: 0 0 1rem; color: var(--text-mute); }
+ul { color: var(--text-mute); padding-left: 20px; }
+li { margin: .35rem 0; }
+hr { border: 0; height: 1px; background: var(--border); margin: 60px 0; }
+
+header.top {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  padding: 18px var(--pad, 24px);
+  display: flex; justify-content: space-between; align-items: center;
+  backdrop-filter: blur(12px);
+  background: linear-gradient(180deg, rgba(15,13,10,.8), rgba(15,13,10,0));
+  border-bottom: 1px solid var(--border);
+}
+header.top .logo {
+  font-family: var(--font-display); font-weight: 800;
+  color: var(--accent); letter-spacing: -0.03em; font-size: 20px;
+}
+header.top .logo:hover { text-decoration: none; filter: brightness(1.1); }
+header.top .nav { display: flex; gap: 20px; align-items: center; }
+header.top .nav a {
+  font-family: var(--font-mono); font-size: 12px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-mute); padding: 6px 12px;
+  border-radius: 999px; border: 1px solid var(--border);
+  transition: all .2s ease;
+}
+header.top .nav a:hover {
+  color: var(--text); border-color: var(--border-strong);
+  text-decoration: none;
+}
+header.top .nav a.active { color: var(--text); border-color: var(--border-strong); }
+
+.layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 60px; max-width: 1200px;
+  margin: 0 auto; padding: 120px 32px 80px;
+}
+aside.toc {
+  position: sticky; top: 100px; align-self: start;
+  max-height: calc(100vh - 120px); overflow-y: auto;
+  padding-right: 12px;
+}
+aside.toc .group { margin-bottom: 24px; }
+aside.toc .group-title {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 8px;
+}
+aside.toc ul { list-style: none; padding: 0; margin: 0; }
+aside.toc li { margin: 0; }
+aside.toc a {
+  display: block; padding: 6px 10px; border-radius: 6px;
+  font-size: 13px; color: var(--text-mute);
+  transition: all .15s ease;
+}
+aside.toc a:hover {
+  color: var(--text); background: var(--surface); text-decoration: none;
+}
+
+article { min-width: 0; }
+article > p:first-of-type { font-size: 18px; color: var(--text); }
+.lead { color: var(--text-mute); font-size: 17px; }
+
+.callout {
+  border-left: 3px solid var(--accent);
+  background: rgba(255, 122, 61, 0.05);
+  padding: 16px 20px; border-radius: 0 8px 8px 0;
+  margin: 24px 0; color: var(--text-mute);
+}
+.callout strong { color: var(--text); }
+.callout.warn { border-left-color: #E9D8A6; background: rgba(233, 216, 166, 0.05); }
+
+table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+th { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
+td { color: var(--text-mute); vertical-align: top; }
+td code { white-space: nowrap; }
+
+.pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em;
+  text-transform: uppercase; border: 1px solid var(--border-strong);
+  color: var(--text-mute); margin-left: 8px;
+}
+.pill.ok { color: #7FD99C; border-color: rgba(127, 217, 156, 0.3); }
+.pill.warn { color: #E9D8A6; border-color: rgba(233, 216, 166, 0.3); }
+
+footer.foot {
+  border-top: 1px solid var(--border);
+  margin-top: 80px; padding: 40px 32px;
+  text-align: center; font-family: var(--font-mono);
+  font-size: 12px; color: var(--text-faint);
+}
+footer.foot a { color: var(--text-mute); }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; padding: 100px 20px 60px; }
+  aside.toc { position: static; max-height: none; overflow: visible; margin-bottom: 20px; }
+  aside.toc .group { display: inline-block; margin-right: 20px; vertical-align: top; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <a href="/" class="logo">HATCH</a>
+  <nav class="nav">
+    <a href="/">Retour</a>
+    <a href="/docs/" class="active">Docs</a>
+    <a href="https://github.com/itsaam/hatch" target="_blank" rel="noopener">GitHub</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="toc">
+    <div class="group">
+      <div class="group-title">Commencer</div>
+      <ul>
+        <li><a href="#intro">Introduction</a></li>
+        <li><a href="#pourquoi">Pourquoi <code>.hatch.yml</code></a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+      </ul>
+    </div>
+    <div class="group">
+      <div class="group-title">Référence</div>
+      <ul>
+        <li><a href="#config">Format <code>.hatch.yml</code></a></li>
+        <li><a href="#variables">Variables</a></li>
+        <li><a href="#healthcheck">Healthcheck</a></li>
+        <li><a href="#seed">Seed SQL</a></li>
+        <li><a href="#isolation">Isolation & cleanup</a></li>
+      </ul>
+    </div>
+    <div class="group">
+      <div class="group-title">Exemples</div>
+      <ul>
+        <li><a href="#ex-node">Node + Postgres</a></li>
+        <li><a href="#ex-python">Python + Redis + Postgres</a></li>
+        <li><a href="#ex-rails">Rails + Sidekiq</a></li>
+        <li><a href="#ex-static">Static (sans DB)</a></li>
+      </ul>
+    </div>
+    <div class="group">
+      <div class="group-title">Opérations</div>
+      <ul>
+        <li><a href="#ttl">Durée de vie & TTL</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#limites">Limites actuelles</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <article>
+    <h1 id="intro">Documentation</h1>
+    <p class="lead">Hatch spawn une preview isolée (app + DB + services) pour chaque pull request, avec une URL live commentée sur la PR. Cette page explique le format <code>.hatch.yml</code>, les variables disponibles, l'isolation et plusieurs exemples réels.</p>
+
+    <hr>
+
+    <h2 id="pourquoi">Pourquoi <code>.hatch.yml</code> ?</h2>
+    <p>Vercel, Netlify, Cloudflare Pages excellent sur les <strong>apps stateless</strong> (frontend statique, fonctions edge). Dès que ton app a une base de données, Redis, un worker, des secrets — ça se complique. Tu te retrouves à :</p>
+    <ul>
+      <li>Partager une DB staging entre tous les reviewers → pollution de données</li>
+      <li>Faire tourner l'app localement en installant la stack → reviewer non-tech perdu</li>
+      <li>Payer Vercel Pro + DB managées + Redis managé pour chaque PR → explose la facture</li>
+    </ul>
+    <p>Hatch résout ça en lisant un fichier <code>.hatch.yml</code> à la racine du repo. Ce fichier déclare <strong>le stack complet nécessaire à ta PR</strong> — app, DB, cache, workers. Hatch spawn tout, isole chaque PR dans son propre réseau Docker, et nettoie à la fermeture.</p>
+
+    <div class="callout">
+      <strong>TL;DR</strong> — si ton projet est une app stateless avec un seul Dockerfile, Hatch fonctionne sans <code>.hatch.yml</code>. Dès que t'as besoin d'une DB, <code>.hatch.yml</code> devient obligatoire pour déclarer les services.
+    </div>
+
+    <hr>
+
+    <h2 id="quickstart">Quickstart</h2>
+    <p>En 3 étapes pour ajouter Hatch à un repo existant :</p>
+
+    <h3>1. Installe la GitHub App</h3>
+    <p>Sur <a href="https://github.com/apps/hatchpr-preview" target="_blank">github.com/apps/hatchpr-preview</a>, clique <em>Install</em>, sélectionne les repos où activer Hatch.</p>
+
+    <h3>2. Ajoute un <code>.hatch.yml</code> à la racine</h3>
+<pre><code><span class="k">version:</span> <span class="n">1</span>
+
+<span class="k">services:</span>
+  <span class="k">web:</span>
+    <span class="k">build:</span> <span class="s">.</span>
+    <span class="k">port:</span> <span class="n">3000</span>
+    <span class="k">expose:</span> <span class="s">true</span>
+    <span class="k">env:</span>
+      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app</span></code></pre>
+
+    <h3>3. Ouvre une PR</h3>
+    <p>Hatch reçoit le webhook, build ton stack, route l'URL sur <code>pr-&lt;numéro&gt;-&lt;repo&gt;.hatchpr.dev</code>, et commente le lien sur la PR. Fermeture de la PR = cleanup total.</p>
+
+    <hr>
+
+    <h2 id="config">Format <code>.hatch.yml</code></h2>
+    <p>Spec complète. Toutes les clés hors <code>version</code> et un <code>services.*</code> minimum sont optionnelles.</p>
+
+<pre><code><span class="k">version:</span> <span class="n">1</span>
+
+<span class="k">services:</span>
+  <span class="k">&lt;nom-du-service&gt;:</span>
+    <span class="c"># Une seule des deux parmi build / image</span>
+    <span class="k">build:</span> <span class="s">.</span>                    <span class="c"># chemin du Dockerfile</span>
+    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>    <span class="c"># OU image Docker pré-buildée</span>
+
+    <span class="k">port:</span> <span class="n">3000</span>                  <span class="c"># port interne exposé</span>
+    <span class="k">expose:</span> <span class="s">true</span>                 <span class="c"># un seul service expose: true (routé via Traefik)</span>
+
+    <span class="k">env:</span>
+      <span class="k">KEY:</span> <span class="s">valeur</span>
+      <span class="k">DATABASE_URL:</span> <span class="s">postgres://user:${DB_PASSWORD}@db:5432/app</span>
+
+    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>     <span class="c"># attente que ces services soient healthy</span>
+
+    <span class="k">healthcheck:</span>
+      <span class="k">cmd:</span> <span class="s">pg_isready -U app</span>
+      <span class="k">interval_seconds:</span> <span class="n">3</span>
+      <span class="k">retries:</span> <span class="n">20</span>
+
+<span class="k">seed:</span>
+  <span class="k">after:</span> <span class="s">db</span>                     <span class="c"># service qui doit être healthy avant exécution</span>
+  <span class="k">sql:</span> <span class="s">./seed/preview.sql</span>        <span class="c"># script SQL appliqué une fois</span></code></pre>
+
+    <h3>Règles importantes</h3>
+    <ul>
+      <li><strong>Un seul</strong> service doit avoir <code>expose: true</code> — c'est celui qui reçoit le trafic HTTPS public</li>
+      <li>Les services se joignent par <strong>leur nom court</strong> (<code>db</code>, <code>redis</code>, <code>web</code>) via DNS interne</li>
+      <li><code>port</code> est auto-détecté depuis le Dockerfile si absent</li>
+      <li>Les valeurs <code>env</code> supportent la substitution de <a href="#variables">variables</a></li>
+    </ul>
+
+    <hr>
+
+    <h2 id="variables">Variables</h2>
+    <p>Dans les valeurs <code>env</code>, tu peux utiliser :</p>
+
+    <table>
+      <thead>
+        <tr><th>Variable</th><th>Exemple</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>${PR}</code></td><td><code>42</code></td><td>Numéro de la pull request</td></tr>
+        <tr><td><code>${SHA}</code></td><td><code>a1b2c3d</code></td><td>Commit SHA court (7 chars)</td></tr>
+        <tr><td><code>${REPO}</code></td><td><code>itsaam-hatch-demo-node</code></td><td>Slug du repo</td></tr>
+        <tr><td><code>${DB_PASSWORD}</code></td><td><code>9f3a7e...</code></td><td>Dérivé déterministe HMAC. Stable entre redeploys de la même PR, différent par PR.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>Secrets persistants</strong> — pour des clés API (Stripe test, SendGrid dev, etc.), un secret store est prévu (pas encore exposé). Pour l'instant, tu peux hardcoder des valeurs de <em>test</em> directement dans <code>.hatch.yml</code>. Ne mets jamais de secrets de production.
+    </div>
+
+    <hr>
+
+    <h2 id="healthcheck">Healthcheck</h2>
+    <p>Hatch attend qu'un service soit <em>healthy</em> avant de démarrer ceux qui en dépendent (<code>depends_on</code>) et avant d'appliquer le seed. Sans healthcheck, il attend juste que le container soit <em>running</em> + 2s de grâce.</p>
+
+<pre><code><span class="k">db:</span>
+  <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
+  <span class="k">healthcheck:</span>
+    <span class="k">cmd:</span> <span class="s">pg_isready -U app -d app</span>
+    <span class="k">interval_seconds:</span> <span class="n">3</span>   <span class="c"># défaut: 5s</span>
+    <span class="k">retries:</span> <span class="n">20</span>             <span class="c"># défaut: 10</span></code></pre>
+
+    <p>Le <code>cmd</code> est exécuté via <code>sh -c</code> dans le container. Timeout global pour devenir healthy : <strong>90 secondes</strong>. Si dépassé, le deploy échoue.</p>
+
+    <hr>
+
+    <h2 id="seed">Seed SQL</h2>
+    <p>Seeds optionnels pour pré-remplir la DB avec un utilisateur de test, des données fixtures, etc. Exécuté <strong>une fois</strong> par PR après que le service <code>seed.after</code> soit healthy.</p>
+
+<pre><code><span class="c">-- seed/preview.sql</span>
+<span class="k">CREATE TABLE IF NOT EXISTS</span> <span class="s">users</span> (
+  <span class="s">id</span> <span class="k">SERIAL PRIMARY KEY</span>,
+  <span class="s">email</span> <span class="k">TEXT UNIQUE NOT NULL</span>,
+  <span class="s">password_hash</span> <span class="k">TEXT NOT NULL</span>
+);
+
+<span class="k">INSERT INTO</span> <span class="s">users</span> (email, password_hash) <span class="k">VALUES</span>
+  (<span class="s">'demo@example.com'</span>, <span class="s">'$2a$10$...'</span>)
+<span class="k">ON CONFLICT</span> (email) <span class="k">DO NOTHING</span>;</code></pre>
+
+    <div class="callout warn">
+      <strong>Idempotent</strong> — ton seed peut être rejoué. Utilise <code>CREATE TABLE IF NOT EXISTS</code>, <code>ON CONFLICT DO NOTHING</code>, etc. Une erreur de seed n'empêche PAS le deploy (warning logué uniquement).
+    </div>
+
+    <hr>
+
+    <h2 id="isolation">Isolation & cleanup</h2>
+    <p>Pour chaque PR, Hatch crée :</p>
+    <ul>
+      <li>Un <strong>réseau Docker dédié</strong> : <code>hatch-net-&lt;slug&gt;-&lt;pr&gt;</code> (bridge isolé)</li>
+      <li>Un container par service : <code>hatch-pr-&lt;slug&gt;-&lt;pr&gt;-&lt;service&gt;</code></li>
+      <li>Des alias DNS internes : <code>web</code>, <code>db</code>, <code>redis</code>… pour que les services se causent sans connaître les noms complets</li>
+    </ul>
+    <p>Seul le service <code>expose: true</code> est joignable de l'extérieur via Traefik + Let's Encrypt sur <code>https://pr-&lt;pr&gt;-&lt;slug&gt;.hatchpr.dev</code>.</p>
+
+    <h3>Cleanup automatique</h3>
+    <ul>
+      <li><strong>PR mergée ou fermée</strong> → suppression immédiate : containers + network (volumes DB inclus)</li>
+      <li><strong>TTL d'inactivité</strong> → 7 jours par défaut, la preview hiberne et le bot commente. Reouvrir = redeploy.</li>
+      <li><strong>Boot API</strong> → reconciliation : les containers orphelins sont détruits, les previews zombies marquées failed</li>
+    </ul>
+    <div class="callout">
+      <strong>Zéro pollution</strong> — chaque PR voit uniquement <em>ses</em> données. Deux reviewers qui inscrivent le même email sur deux PR différentes ne se marchent pas dessus.
+    </div>
+
+    <hr>
+
+    <h2 id="ex-node">Exemple : Node + Postgres</h2>
+    <p>App Express qui expose <code>/api/register</code> et <code>/api/login</code>. Source du demo : <a href="https://github.com/itsaam/hatch-demo-node" target="_blank">github.com/itsaam/hatch-demo-node</a>.</p>
+
+<pre><code><span class="k">version:</span> <span class="n">1</span>
+
+<span class="k">services:</span>
+  <span class="k">web:</span>
+    <span class="k">build:</span> <span class="s">.</span>
+    <span class="k">port:</span> <span class="n">3000</span>
+    <span class="k">expose:</span> <span class="s">true</span>
+    <span class="k">env:</span>
+      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app</span>
+      <span class="k">PORT:</span> <span class="s">"3000"</span>
+    <span class="k">depends_on:</span> <span class="s">[db]</span>
+
+  <span class="k">db:</span>
+    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
+    <span class="k">env:</span>
+      <span class="k">POSTGRES_USER:</span> <span class="s">app</span>
+      <span class="k">POSTGRES_PASSWORD:</span> <span class="s">${DB_PASSWORD}</span>
+      <span class="k">POSTGRES_DB:</span> <span class="s">app</span>
+    <span class="k">healthcheck:</span>
+      <span class="k">cmd:</span> <span class="s">pg_isready -U app</span>
+      <span class="k">interval_seconds:</span> <span class="n">3</span>
+      <span class="k">retries:</span> <span class="n">20</span>
+
+<span class="k">seed:</span>
+  <span class="k">after:</span> <span class="s">db</span>
+  <span class="k">sql:</span> <span class="s">./seed/preview.sql</span></code></pre>
+
+    <h2 id="ex-python">Exemple : Python (FastAPI/Django) + Postgres + Redis</h2>
+
+<pre><code><span class="k">version:</span> <span class="n">1</span>
+
+<span class="k">services:</span>
+  <span class="k">api:</span>
+    <span class="k">build:</span> <span class="s">.</span>
+    <span class="k">port:</span> <span class="n">8000</span>
+    <span class="k">expose:</span> <span class="s">true</span>
+    <span class="k">env:</span>
+      <span class="k">DATABASE_URL:</span> <span class="s">postgresql://app:${DB_PASSWORD}@db:5432/app</span>
+      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379/0</span>
+      <span class="k">DEBUG:</span> <span class="s">"true"</span>
+    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>
+
+  <span class="k">db:</span>
+    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
+    <span class="k">env:</span>
+      <span class="k">POSTGRES_USER:</span> <span class="s">app</span>
+      <span class="k">POSTGRES_PASSWORD:</span> <span class="s">${DB_PASSWORD}</span>
+      <span class="k">POSTGRES_DB:</span> <span class="s">app</span>
+    <span class="k">healthcheck:</span>
+      <span class="k">cmd:</span> <span class="s">pg_isready -U app</span>
+
+  <span class="k">redis:</span>
+    <span class="k">image:</span> <span class="s">redis:7-alpine</span>
+    <span class="k">healthcheck:</span>
+      <span class="k">cmd:</span> <span class="s">redis-cli ping</span></code></pre>
+
+    <h2 id="ex-rails">Exemple : Rails + Sidekiq</h2>
+
+<pre><code><span class="k">version:</span> <span class="n">1</span>
+
+<span class="k">services:</span>
+  <span class="k">web:</span>
+    <span class="k">build:</span> <span class="s">.</span>
+    <span class="k">port:</span> <span class="n">3000</span>
+    <span class="k">expose:</span> <span class="s">true</span>
+    <span class="k">env:</span>
+      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app_pr_${PR}</span>
+      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379/0</span>
+      <span class="k">RAILS_ENV:</span> <span class="s">production</span>
+      <span class="k">SECRET_KEY_BASE:</span> <span class="s">${DB_PASSWORD}</span>
+    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>
+
+  <span class="k">worker:</span>
+    <span class="k">build:</span> <span class="s">.</span>
+    <span class="k">env:</span>
+      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app_pr_${PR}</span>
+      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379/0</span>
+    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>
+
+  <span class="k">db:</span>
+    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
+    <span class="k">env:</span>
+      <span class="k">POSTGRES_USER:</span> <span class="s">app</span>
+      <span class="k">POSTGRES_PASSWORD:</span> <span class="s">${DB_PASSWORD}</span>
+
+  <span class="k">redis:</span>
+    <span class="k">image:</span> <span class="s">redis:7-alpine</span></code></pre>
+
+    <p>Le <code>worker</code> n'a pas de <code>expose: true</code> → il tourne en interne, pas accessible publiquement.</p>
+
+    <h2 id="ex-static">Exemple : Static (sans DB)</h2>
+    <p>Pour un site statique ou une SPA, tu n'as <strong>pas besoin</strong> de <code>.hatch.yml</code>. Hatch détecte le <code>Dockerfile</code> à la racine, le build, et route directement.</p>
+<pre><code><span class="c"># Dockerfile minimal suffit</span>
+<span class="k">FROM</span> <span class="s">nginx:alpine</span>
+<span class="k">COPY</span> <span class="s">./dist</span> <span class="s">/usr/share/nginx/html</span>
+<span class="k">EXPOSE</span> <span class="n">80</span></code></pre>
+
+    <hr>
+
+    <h2 id="ttl">Durée de vie & TTL</h2>
+    <ul>
+      <li>Une preview active reste en ligne tant que la PR est ouverte</li>
+      <li>Sans activité (push, commit) pendant <strong>7 jours</strong>, elle hiberne automatiquement : containers supprimés, DB purgée</li>
+      <li>Pour réveiller : push un commit sur la branche → Hatch redeploy à neuf</li>
+      <li>TTL configurable par l'admin du serveur (env <code>PREVIEW_TTL_HOURS</code>)</li>
+    </ul>
+
+    <h2 id="troubleshooting">Troubleshooting</h2>
+
+    <h3><code>deploy failed: build ...</code></h3>
+    <ul>
+      <li>Vérifie que ton <code>Dockerfile</code> build en local : <code>docker build .</code></li>
+      <li>Un <code>.dockerignore</code> manquant peut faire exploser la taille du contexte</li>
+      <li>Les logs complets sont visibles côté serveur (<code>docker logs hatch-api-1</code>)</li>
+    </ul>
+
+    <h3><code>seed failed (non-fatal)</code></h3>
+    <ul>
+      <li>Ton SQL a une syntax error ou référence une table inexistante</li>
+      <li>Rends ton seed idempotent avec <code>CREATE TABLE IF NOT EXISTS</code> et <code>ON CONFLICT DO NOTHING</code></li>
+      <li>Le deploy continue quand même — seule la DB reste vide</li>
+    </ul>
+
+    <h3>Le service ne peut pas joindre la DB</h3>
+    <ul>
+      <li>Vérifie que tu utilises le <strong>nom court</strong> du service dans l'URL (<code>db</code>, pas <code>hatch-pr-xxx-db</code>)</li>
+      <li>Ajoute <code>depends_on: [db]</code> pour garantir l'ordre de démarrage</li>
+      <li>La DB doit avoir un <code>healthcheck</code> pour que <code>depends_on</code> attende vraiment qu'elle soit prête</li>
+    </ul>
+
+    <h3>Certificat SSL invalide pendant ~30s</h3>
+    <p>Let's Encrypt émet le cert à la volée. Lors du premier accès à une nouvelle PR, attends 30s et force-refresh.</p>
+
+    <hr>
+
+    <h2 id="limites">Limites actuelles</h2>
+    <p>Hatch est en beta. Ce qui n'est pas encore supporté :</p>
+    <ul>
+      <li>Pas de <strong>volumes persistants</strong> — la DB d'une preview est toujours repartie de zéro au redeploy (et c'est souvent ce qu'on veut)</li>
+      <li>Pas de <strong>secret store</strong> UI — pour des clés API de test, hardcode dans <code>.hatch.yml</code> (ne mets jamais de secrets de prod)</li>
+      <li>Pas de <strong>dashboard web</strong> — pour l'instant, status via le bot GitHub + logs serveur</li>
+      <li>Pas de <strong>ressources limites</strong> — chaque service peut consommer tout ce qu'il veut (à venir : CPU/RAM limits dans le yml)</li>
+      <li>Pas de <strong>multi-region</strong> — une seule infra host pour l'instant</li>
+    </ul>
+
+    <p class="lead" style="margin-top: 40px;">Retour à la <a href="/">landing</a> · <a href="https://github.com/itsaam/hatch" target="_blank">Code source</a> · <a href="https://github.com/itsaam/hatch/issues" target="_blank">Signaler un bug</a></p>
+  </article>
+</div>
+
+<footer class="foot">
+  HATCH — <a href="https://hatchpr.dev">hatchpr.dev</a> — Self-hosted PR preview deployments
+</footer>
+</body>
+</html>
