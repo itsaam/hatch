@@ -32,9 +32,7 @@ archives:
   - id: hatch
     ids:
       - hatch
-    name_template: >-
-      {{ .ProjectName | replace "-cli" "" }}_{{ .Version }}_
-      {{- title .Os }}_{{ .Arch }}
+    name_template: "hatch_{{ .Version }}_{{ title .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     format_overrides:
       - goos: windows
