@@ -509,6 +509,8 @@ footer.foot a { color: var(--text-mute); }
     <h2 id="limites">Limites actuelles</h2>
     <p>Hatch est en beta. Ce qui n'est pas encore supporté :</p>
     <ul>
+      <li>Pas de <strong>BuildKit</strong> — les Dockerfiles qui utilisent <code>RUN --mount=type=cache</code> ou <code>--mount=type=secret</code> ne sont pas compatibles. Retire ces directives ou attends la prochaine version.</li>
+      <li>Docker 29+ avec <strong>containerd snapshotter</strong> par défaut — le builder legacy utilisé par Hatch ne fonctionne pas sur cette configuration. Utilise un Docker antérieur (&lt; 29) ou désactive le containerd snapshotter pour l'instant.</li>
       <li>Pas de <strong>volumes persistants</strong> — la DB d'une preview est toujours repartie de zéro au redeploy (et c'est souvent ce qu'on veut)</li>
       <li>Pas de <strong>secret store</strong> UI — pour des clés API de test, hardcode dans <code>.hatch.yml</code> (ne mets jamais de secrets de prod)</li>
       <li>Pas de <strong>dashboard web</strong> — pour l'instant, status via le bot GitHub + logs serveur</li>
