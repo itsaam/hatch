@@ -198,7 +198,7 @@ func (d *Deployer) pruneOldImagesForStack(ctx context.Context, slug string, pr i
 	return nil
 }
 
-func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installationID int64) error {
+func (d *Deployer) build(ctx context.Context, repo, sha, tag, dockerfile string, installationID int64) error {
 	// For private repos, embed the installation token in the clone URL so
 	// the Docker daemon can fetch the tree without prompting.
 	// Public repos still work with the plain URL.
@@ -218,6 +218,9 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installatio
 	q.Set("forcerm", "1")
 	q.Set("nocache", "1")   // avoid cross-PR cache layer conflicts — prioritise correctness over speed
 	q.Set("version", "2")   // BuildKit: required for Docker 29+ containerd snapshotter and --mount=type=cache syntax
+	if dockerfile != "" {
+		q.Set("dockerfile", dockerfile)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		d.dockerURL("/build?"+q.Encode()),

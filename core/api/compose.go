@@ -28,6 +28,7 @@ type ComposeSpec struct {
 // mutually exclusive.
 type ComposeService struct {
 	Build       string              `yaml:"build,omitempty"`
+	Dockerfile  string              `yaml:"dockerfile,omitempty"`
 	Image       string              `yaml:"image,omitempty"`
 	Port        int                 `yaml:"port,omitempty"`
 	Expose      bool                `yaml:"expose,omitempty"`
@@ -91,6 +92,14 @@ func validateCompose(spec *ComposeSpec) error {
 		hasImage := strings.TrimSpace(svc.Image) != ""
 		if hasBuild == hasImage {
 			return fmt.Errorf("hatch.yml: service %q must set exactly one of build/image", name)
+		}
+		if df := strings.TrimSpace(svc.Dockerfile); df != "" {
+			if !hasBuild {
+				return fmt.Errorf("hatch.yml: service %q sets dockerfile without build", name)
+			}
+			if strings.HasPrefix(df, "/") || strings.Contains(df, "..") {
+				return fmt.Errorf("hatch.yml: service %q has invalid dockerfile path %q (must be relative, no ..)", name, df)
+			}
 		}
 		if svc.Expose {
 			exposed++
