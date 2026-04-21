@@ -88,8 +88,8 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 	slug := slugify(ref.Repo)
 	name := fmt.Sprintf("hatch-preview-%s-%d", slug, ref.PR)
 	tag := fmt.Sprintf("%s:%s", name, shortSHA(ref.SHA))
-	host := fmt.Sprintf("pr-%d.%s.%s", ref.PR, slug, d.domain)
-	publicURL := "http://" + host
+	host := fmt.Sprintf("pr-%d-%s.%s", ref.PR, slug, d.domain)
+	publicURL := "https://" + host
 
 	log.Printf("deploy start: %s → %s", name, publicURL)
 	d.setStatus(ctx, ref, "building", "")
@@ -190,9 +190,12 @@ func (d *Deployer) run(ctx context.Context, name, tag, host string) error {
 	body := createBody{
 		Image: tag,
 		Labels: map[string]string{
-			"traefik.enable": "true",
+			"traefik.enable":         "true",
+			"traefik.docker.network": d.network,
 			fmt.Sprintf("traefik.http.routers.%s.rule", r):                      fmt.Sprintf("Host(`%s`)", host),
-			fmt.Sprintf("traefik.http.routers.%s.entrypoints", r):               "web",
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints", r):               "websecure",
+			fmt.Sprintf("traefik.http.routers.%s.tls", r):                       "true",
+			fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", r):          "letsencrypt",
 			fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", r): port,
 			"hatch.managed": "true",
 		},

@@ -1,48 +1,4 @@
 services:
-  socketproxy:
-    image: wollomatic/socket-proxy:1.11.4
-    restart: unless-stopped
-    user: "0:0"
-    read_only: true
-    mem_limit: 64m
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges
-    command:
-      - -loglevel=debug
-      - -allowfrom=traefik
-      - -listenip=0.0.0.0
-      - -allowGET=/(_ping|v1\..{1,2}/(version|_ping|containers/.*|networks/.*|services/.*|tasks/.*|events))
-      - -allowHEAD=/(_ping|v1\..{1,2}/(version|_ping|containers/.*|networks/.*|services/.*|tasks/.*))
-      - -watchdoginterval=600
-      - -stoponwatchdog
-      - -shutdowngracetime=5
-      - -socketpath=/var/run/docker.sock
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - socket
-
-  traefik:
-    image: traefik:v3.6
-    restart: unless-stopped
-    depends_on:
-      - socketproxy
-    command:
-      - --providers.docker=true
-      - --providers.docker.endpoint=tcp://socketproxy:2375
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=hatch_public
-      - --entrypoints.web.address=:80
-      - --api.insecure=true
-      - --log.level=INFO
-    ports:
-      - "80:80"
-      - "127.0.0.1:8081:8080"
-    networks:
-      - public
-      - socket
-
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -52,6 +8,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - hatch_pgdata:/var/lib/postgresql/data
+    networks:
+      - hatch_internal
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -71,25 +29,46 @@ services:
       GITHUB_APP_ENABLED: ${GITHUB_APP_ENABLED:-true}
       GITHUB_APP_ID: ${GITHUB_APP_ID}
       GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-app.pem
-      HATCH_NETWORK: hatch_public
-      HATCH_DOMAIN: ${HATCH_DOMAIN:-localhost}
+      HATCH_NETWORK: dokploy-network
+      HATCH_DOMAIN: ${HATCH_DOMAIN}
       PREVIEW_TTL_HOURS: ${PREVIEW_TTL_HOURS:-168}
       PREVIEW_REAPER_INTERVAL_MINUTES: ${PREVIEW_REAPER_INTERVAL_MINUTES:-60}
       PORT: "8080"
-    ports:
-      - "127.0.0.1:8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./core/api/secrets:/app/secrets:ro
+      - /etc/hatch/secrets:/app/secrets:ro
+    networks:
+      - hatch_internal
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.hatch-api.rule=Host(`api.${HATCH_DOMAIN}`)
+      - traefik.http.routers.hatch-api.entrypoints=websecure
+      - traefik.http.routers.hatch-api.tls=true
+      - traefik.http.routers.hatch-api.tls.certresolver=letsencrypt
+      - traefik.http.services.hatch-api.loadbalancer.server.port=8080
+
+  landing:
+    build: ./landing
+    restart: unless-stopped
+    networks:
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.hatch-landing.rule=Host(`${HATCH_DOMAIN}`) || Host(`www.${HATCH_DOMAIN}`)
+      - traefik.http.routers.hatch-landing.entrypoints=websecure
+      - traefik.http.routers.hatch-landing.tls=true
+      - traefik.http.routers.hatch-landing.tls.certresolver=letsencrypt
+      - traefik.http.services.hatch-landing.loadbalancer.server.port=80
 
 networks:
-  default:
-    name: hatch_default
-  public:
-    name: hatch_public
-  socket:
-    name: hatch_socket
+  hatch_internal:
+    name: hatch_internal
     internal: true
+  dokploy-network:
+    external: true
 
 volumes:
   hatch_pgdata:
