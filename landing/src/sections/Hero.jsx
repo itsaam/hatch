@@ -4,6 +4,7 @@ import EmailCapture from '../components/EmailCapture.jsx'
 import Marquee from '../components/Marquee.jsx'
 
 export default function Hero({ ready }) {
+  const sectionRef = useRef(null)
   const titleRef = useRef(null)
   const subRef = useRef(null)
   const [count, setCount] = useState(null)
@@ -31,14 +32,14 @@ export default function Hero({ ready }) {
         .to('.hero-form', { y: 0, opacity: 1, duration: 0.7, ease: 'expo.out' }, '-=0.5')
         .to('.hero-meta', { y: 0, opacity: 1, duration: 0.6, ease: 'expo.out' }, '-=0.4')
         .to('.hero-tags', { y: 0, opacity: 1, duration: 0.6, ease: 'expo.out' }, '-=0.4')
-    }, titleRef)
+    }, sectionRef)
 
     return () => ctx.revert()
   }, [ready])
 
   const words = ['Chaque', 'PR', 'éclot', 'en', 'preview', 'live,']
   return (
-    <section style={{
+    <section ref={sectionRef} style={{
       minHeight: '100vh', display: 'flex', flexDirection: 'column',
       justifyContent: 'center', padding: '120px var(--pad) 60px',
       position: 'relative', overflow: 'hidden'
