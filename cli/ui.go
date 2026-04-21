@@ -215,7 +215,30 @@ func (u *UI) DryRunBlock(yaml string) {
 	}
 	fmt.Fprintln(u.Out)
 	fmt.Fprintln(u.Out, u.muted.Render("Dry run — no file written"))
-	fmt.Fprintln(u.Out, u.dryRun.Render(strings.TrimRight(yaml, "\n")))
+	fmt.Fprintln(u.Out, u.muted.Render(strings.Repeat("─", 60)))
+	// Plain YAML output — pas de box, juste une règle pour séparer.
+	// Keys colorées accent, valeurs neutres, commentaires mutés.
+	for _, line := range strings.Split(strings.TrimRight(yaml, "\n"), "\n") {
+		fmt.Fprintln(u.Out, u.colorizeYAMLLine(line))
+	}
+	fmt.Fprintln(u.Out, u.muted.Render(strings.Repeat("─", 60)))
+}
+
+// colorizeYAMLLine applies a light syntax highlighting :
+// commentaires en muted, keys en accent, strings en normal.
+func (u *UI) colorizeYAMLLine(line string) string {
+	trimmed := strings.TrimLeft(line, " ")
+	indent := line[:len(line)-len(trimmed)]
+	if strings.HasPrefix(trimmed, "#") {
+		return indent + u.muted.Render(trimmed)
+	}
+	// key: value pattern — colore juste la key
+	if idx := strings.Index(trimmed, ":"); idx > 0 && !strings.HasPrefix(trimmed, "-") {
+		key := trimmed[:idx]
+		rest := trimmed[idx:]
+		return indent + u.accent.Render(key) + rest
+	}
+	return line
 }
 
 // Accent returns an accent-styled string for inline composition.
