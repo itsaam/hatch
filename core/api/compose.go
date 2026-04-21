@@ -140,6 +140,9 @@ type SubstitutionContext struct {
 	Slug       string // sanitized slug
 	DBPassword string
 	Domain     string // e.g. "hatchpr.dev", used to derive PREVIEW_URL / PREVIEW_HOST
+	// Secrets maps secret-name -> plaintext. Referenced via ${SECRET_<NAME>}.
+	// Unknown secret names are left untouched (same policy as unknown ${VAR}).
+	Secrets map[string]string
 }
 
 // DeriveDBPassword builds a deterministic per-PR DB password.
@@ -176,6 +179,16 @@ func substituteString(s string, sctx SubstitutionContext) string {
 	}
 	return varRE.ReplaceAllStringFunc(s, func(match string) string {
 		name := match[2 : len(match)-1]
+		if strings.HasPrefix(name, "SECRET_") {
+			if sctx.Secrets == nil {
+				return match
+			}
+			secretName := name[len("SECRET_"):]
+			if v, ok := sctx.Secrets[secretName]; ok {
+				return v
+			}
+			return match
+		}
 		switch name {
 		case "PR":
 			return fmt.Sprintf("%d", sctx.PR)

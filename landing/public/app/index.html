@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — Hatch</title>
+<meta name="description" content="Hatch admin dashboard — previews, logs, secrets.">
+<meta name="robots" content="noindex,nofollow">
+<link rel="icon" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0F0D0A;
+  --surface: #161310;
+  --surface-2: #1D1915;
+  --surface-3: #241F1A;
+  --text: #F5EFE6;
+  --text-mute: #A89D8A;
+  --text-faint: #6E6355;
+  --border: rgba(245, 239, 230, 0.08);
+  --border-strong: rgba(245, 239, 230, 0.16);
+  --accent: #FF7A3D;
+  --accent-2: #E9D8A6;
+  --green: #7FD99C;
+  --red: #E57373;
+  --font-display: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: var(--font-display); font-size: 14px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+button {
+  font-family: inherit; cursor: pointer; border: none; background: none; color: inherit;
+}
+button:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+input {
+  font-family: inherit; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  padding: 10px 14px; border-radius: 8px; font-size: 14px;
+}
+input:focus { border-color: var(--accent); outline: none; }
+code {
+  font-family: var(--font-mono); font-size: 0.85em;
+  background: var(--surface-2); padding: 2px 6px; border-radius: 4px;
+  color: var(--accent-2);
+}
+
+/* ---------- topbar ---------- */
+header.top {
+  position: sticky; top: 0; z-index: 50;
+  padding: 16px 28px;
+  display: flex; justify-content: space-between; align-items: center;
+  backdrop-filter: blur(12px);
+  background: linear-gradient(180deg, rgba(15,13,10,.92), rgba(15,13,10,.78));
+  border-bottom: 1px solid var(--border);
+}
+.top .logo {
+  font-family: var(--font-display); font-weight: 800;
+  color: var(--accent); letter-spacing: -0.03em; font-size: 20px;
+}
+.top .logo:hover { text-decoration: none; filter: brightness(1.15); }
+.top .nav { display: flex; gap: 10px; align-items: center; }
+.top .nav a, .top .nav button {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-mute); padding: 7px 13px;
+  border-radius: 999px; border: 1px solid var(--border);
+  transition: color .2s, border-color .2s, background .2s;
+}
+.top .nav a:hover, .top .nav button:hover {
+  color: var(--text); border-color: var(--border-strong); text-decoration: none;
+}
+.top .nav a.active { color: var(--text); border-color: var(--accent); background: rgba(255,122,61,0.08); }
+
+/* ---------- layout ---------- */
+main { max-width: 1280px; margin: 0 auto; padding: 36px 28px 80px; }
+.page-head { margin-bottom: 28px; display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap; }
+.page-head h1 {
+  font-size: 32px; font-weight: 700; letter-spacing: -0.02em;
+  margin: 0 0 4px; line-height: 1.1;
+}
+.page-head p { color: var(--text-mute); margin: 0; font-size: 14px; }
+
+/* ---------- tabs (filters) ---------- */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+.tab {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-mute);
+  padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent;
+  transition: all .18s ease;
+}
+.tab:hover { color: var(--text); border-color: var(--border-strong); }
+.tab.active { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.tab .count {
+  margin-left: 6px; font-size: 10px; opacity: 0.7;
+  padding: 1px 6px; border-radius: 999px;
+  background: rgba(245,239,230,0.06);
+}
+.tab.active .count { background: rgba(15,13,10,0.25); opacity: 0.9; }
+
+/* ---------- previews table / cards ---------- */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden;
+}
+table.previews { width: 100%; border-collapse: collapse; }
+.previews th, .previews td {
+  text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.previews th {
+  font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text-faint); font-weight: 500;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+  position: sticky; top: 64px;
+}
+.previews tbody tr { transition: background .15s ease; }
+.previews tbody tr:hover { background: var(--surface-2); }
+.previews tbody tr:last-child td { border-bottom: none; }
+.previews td.repo {
+  font-weight: 600; color: var(--text);
+}
+.previews td.repo .pr-num {
+  color: var(--accent); font-family: var(--font-mono); font-weight: 500;
+  margin-left: 4px;
+}
+.previews td.meta { color: var(--text-mute); font-family: var(--font-mono); font-size: 12px; }
+.previews td.meta .branch { color: var(--accent-2); }
+.previews td.url a {
+  font-family: var(--font-mono); font-size: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.previews td.when { color: var(--text-faint); font-size: 12px; font-family: var(--font-mono); white-space: nowrap; }
+
+/* ---------- status badges ---------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-mute); background: transparent;
+  white-space: nowrap;
+}
+.badge::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+}
+.badge.running { color: var(--green); border-color: rgba(127,217,156,0.32); background: rgba(127,217,156,0.06); }
+.badge.running::before { box-shadow: 0 0 8px currentColor; animation: pulse 1.8s ease-in-out infinite; }
+.badge.building { color: var(--accent); border-color: rgba(255,122,61,0.32); background: rgba(255,122,61,0.06); }
+.badge.building::before { animation: pulse 1.2s ease-in-out infinite; }
+.badge.failed { color: var(--red); border-color: rgba(229,115,115,0.32); background: rgba(229,115,115,0.06); }
+.badge.expired { color: var(--text-faint); border-color: var(--border); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .badge::before { animation: none !important; } }
+
+/* ---------- row actions ---------- */
+.actions { display: flex; gap: 6px; justify-content: flex-end; }
+.btn-icon {
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; border: 1px solid var(--border);
+  color: var(--text-mute); background: transparent;
+  transition: all .15s ease;
+}
+.btn-icon:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.btn-icon.danger:hover { color: var(--red); border-color: rgba(229,115,115,0.4); background: rgba(229,115,115,0.06); }
+.btn-icon svg { width: 14px; height: 14px; }
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--font-display); font-size: 13px; font-weight: 500;
+  padding: 9px 16px; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: var(--surface-2);
+  color: var(--text);
+  transition: all .18s ease;
+}
+.btn:hover { background: var(--surface-3); border-color: var(--accent); }
+.btn.primary {
+  background: var(--accent); color: var(--bg); border-color: var(--accent);
+  font-weight: 600;
+}
+.btn.primary:hover { filter: brightness(1.1); }
+.btn.danger { border-color: rgba(229,115,115,0.4); color: var(--red); }
+.btn.danger:hover { background: rgba(229,115,115,0.08); border-color: var(--red); }
+
+/* ---------- empty / loading ---------- */
+.state {
+  padding: 80px 40px; text-align: center; color: var(--text-mute);
+}
+.state .ico { font-size: 32px; margin-bottom: 12px; color: var(--text-faint); }
+.state .title { font-size: 16px; color: var(--text); margin-bottom: 6px; font-weight: 600; }
+.state .sub { font-size: 13px; color: var(--text-mute); }
+.spinner {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite; margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* ---------- modal ---------- */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(15, 13, 10, 0.78);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  animation: fadeIn .18s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 14px; width: 100%; max-width: 900px;
+  max-height: 86vh; display: flex; flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+.modal.sm { max-width: 440px; }
+.modal-head {
+  padding: 18px 22px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+}
+.modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.modal-head .sub { color: var(--text-mute); font-family: var(--font-mono); font-size: 12px; margin-top: 2px; }
+.modal-body { padding: 22px; overflow-y: auto; flex: 1; }
+.modal-body .logs {
+  background: #0a0806; border: 1px solid var(--border);
+  border-radius: 8px; padding: 16px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.55;
+  color: var(--text-mute); white-space: pre-wrap; word-break: break-word;
+  max-height: 60vh; overflow-y: auto;
+}
+.modal-foot { padding: 14px 22px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---------- login ---------- */
+.login-wrap {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: 100%; max-width: 420px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 16px; padding: 36px 32px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+}
+.login-card .brand {
+  font-family: var(--font-display); font-weight: 800; font-size: 28px;
+  letter-spacing: -0.03em; color: var(--accent); margin-bottom: 4px;
+}
+.login-card h2 { font-size: 18px; margin: 0 0 6px; font-weight: 600; letter-spacing: -0.01em; }
+.login-card p { color: var(--text-mute); font-size: 13px; margin: 0 0 24px; }
+.login-card label {
+  display: block; font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text-faint); margin-bottom: 8px;
+}
+.login-card input { width: 100%; }
+.login-card .err {
+  margin-top: 12px; color: var(--red); font-size: 12px;
+  font-family: var(--font-mono);
+}
+.login-card .btn { width: 100%; justify-content: center; margin-top: 16px; }
+
+/* ---------- secrets ---------- */
+.secrets-head {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.secrets-head input { flex: 1; min-width: 200px; max-width: 400px; }
+.secrets-list { list-style: none; padding: 0; margin: 0; }
+.secret-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  transition: background .15s ease;
+}
+.secret-item:hover { background: var(--surface-2); }
+.secret-item:last-child { border-bottom: none; }
+.secret-item .name {
+  font-family: var(--font-mono); font-size: 13px; color: var(--text);
+}
+.secret-item .value-hint {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+  margin-left: 12px;
+}
+
+/* ---------- form ---------- */
+.field { margin-bottom: 16px; }
+.field label {
+  display: block; font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text-faint); margin-bottom: 8px;
+}
+.field input { width: 100%; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 720px) {
+  main { padding: 24px 16px 60px; }
+  header.top { padding: 14px 16px; }
+  .page-head h1 { font-size: 24px; }
+  .previews th, .previews td { padding: 10px 12px; }
+  .previews .hide-sm { display: none; }
+  .top .nav a, .top .nav button { padding: 6px 10px; font-size: 10px; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ==============================
+// Hatch Admin Dashboard
+// vanilla JS, no build step
+// ==============================
+
+const API_BASE = (() => {
+  // override via <meta name="hatch-api-base" content="..."> or window.HATCH_API_BASE
+  if (window.HATCH_API_BASE) return window.HATCH_API_BASE;
+  const meta = document.querySelector('meta[name="hatch-api-base"]');
+  if (meta && meta.content) return meta.content;
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    return 'http://localhost:8080';
+  }
+  // prod default — API sous api.hatchpr.dev (à ajuster si nécessaire)
+  return 'https://api.hatchpr.dev';
+})();
+
+const TOKEN_KEY = 'hatch_admin_token';
+
+const state = {
+  token: localStorage.getItem(TOKEN_KEY) || '',
+  view: 'previews',       // 'previews' | 'secrets'
+  filter: 'all',          // all | running | building | failed | expired
+  previews: null,         // null = loading, [] = loaded
+  previewsErr: null,
+  secrets: null,
+  secretsErr: null,
+  secretsRepo: '',
+  modal: null,            // { type, ... }
+};
+
+// ---------- api ----------
+async function api(path, opts = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(opts.headers || {}),
+  };
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+
+  const res = await fetch(API_BASE + path, { ...opts, headers });
+
+  if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
+    state.token = '';
+    render();
+    throw new Error('unauthorized');
+  }
+
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j.error) msg = j.error;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return res.json();
+  return res.text();
+}
+
+// ---------- helpers ----------
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v;
+    else if (k === 'html') el.innerHTML = v;
+    else if (k.startsWith('on') && typeof v === 'function') {
+      el.addEventListener(k.slice(2).toLowerCase(), v);
+    } else if (v === true) el.setAttribute(k, '');
+    else if (v !== false && v != null) el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return el;
+}
+
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24);
+  return `${days}d ago`;
+}
+
+function shortSha(sha) { return (sha || '').slice(0, 7); }
+
+function svgIcon(name) {
+  const icons = {
+    open: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+    logs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>',
+    redeploy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>',
+    add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+    close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  };
+  return icons[name] || '';
+}
+
+// ---------- data loaders ----------
+async function loadPreviews() {
+  state.previews = null;
+  state.previewsErr = null;
+  render();
+  try {
+    const data = await api('/api/previews');
+    state.previews = Array.isArray(data) ? data : (data.previews || []);
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      state.previewsErr = e.message;
+      state.previews = [];
+    }
+  }
+  render();
+}
+
+async function loadSecrets() {
+  state.secrets = null;
+  state.secretsErr = null;
+  render();
+  try {
+    const repo = state.secretsRepo.trim();
+    if (!repo) { state.secrets = []; render(); return; }
+    const data = await api('/api/secrets?repo=' + encodeURIComponent(repo));
+    state.secrets = Array.isArray(data) ? data : (data.secrets || []);
+  } catch (e) {
+    if (e.message !== 'unauthorized') {
+      state.secretsErr = e.message;
+      state.secrets = [];
+    }
+  }
+  render();
+}
+
+// ---------- actions ----------
+async function actionViewLogs(p) {
+  state.modal = { type: 'logs', preview: p, logs: null, err: null };
+  render();
+  try {
+    const data = await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}/logs`);
+    state.modal.logs = typeof data === 'string' ? data : (data.logs || '');
+  } catch (e) {
+    state.modal.err = e.message;
+  }
+  render();
+}
+
+async function actionRedeploy(p) {
+  if (!confirm(`Redeploy ${p.repo_full_name} #${p.pr_number} ?`)) return;
+  try {
+    await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}/redeploy`, { method: 'POST' });
+    await loadPreviews();
+  } catch (e) {
+    alert('Redeploy failed: ' + e.message);
+  }
+}
+
+async function actionStop(p) {
+  if (!confirm(`Stop & destroy ${p.repo_full_name} #${p.pr_number} ?\n\nContainers, network et DB seront supprimés.`)) return;
+  try {
+    await api(`/api/previews/${encodeURIComponent(p.repo_full_name)}/${p.pr_number}`, { method: 'DELETE' });
+    await loadPreviews();
+  } catch (e) {
+    alert('Stop failed: ' + e.message);
+  }
+}
+
+async function actionDeleteSecret(name) {
+  if (!confirm(`Supprimer le secret "${name}" pour ${state.secretsRepo} ?`)) return;
+  try {
+    await api(`/api/secrets?repo=${encodeURIComponent(state.secretsRepo)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await loadSecrets();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+async function actionAddSecret(name, value) {
+  try {
+    await api('/api/secrets', {
+      method: 'POST',
+      body: JSON.stringify({ repo: state.secretsRepo, name, value }),
+    });
+    state.modal = null;
+    await loadSecrets();
+  } catch (e) {
+    alert('Add failed: ' + e.message);
+  }
+}
+
+// ---------- views ----------
+function viewLogin() {
+  const wrap = h('div', { class: 'login-wrap' });
+  let errMsg = '';
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const input = form.querySelector('input');
+    const token = input.value.trim();
+    if (!token) return;
+    // try a real call to validate
+    state.token = token;
+    localStorage.setItem(TOKEN_KEY, token);
+    try {
+      // probe: previews endpoint guarded by bearer — falls back to secrets probe if /api/previews not yet implemented
+      const probe = await fetch(API_BASE + '/api/secrets?repo=__probe__', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (probe.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        state.token = '';
+        errMsg = 'Token invalide.';
+        render();
+        return;
+      }
+      render();
+      loadPreviews();
+    } catch (e) {
+      errMsg = 'Erreur réseau.';
+      render();
+    }
+  };
+
+  const form = h('form', { onSubmit },
+    h('label', { for: 'token' }, 'Admin token'),
+    h('input', { id: 'token', type: 'password', placeholder: '••••••••••••', autofocus: true, required: true }),
+    errMsg && h('div', { class: 'err' }, errMsg),
+    h('button', { class: 'btn primary', type: 'submit' }, 'Se connecter'),
+  );
+
+  const card = h('div', { class: 'login-card' },
+    h('div', { class: 'brand' }, 'HATCH'),
+    h('h2', {}, 'Admin dashboard'),
+    h('p', {}, 'Entre ton token d\'administration pour accéder aux previews et secrets.'),
+    form,
+  );
+  wrap.appendChild(card);
+  return wrap;
+}
+
+function viewTopBar() {
+  return h('header', { class: 'top' },
+    h('a', { href: '/', class: 'logo' }, 'HATCH'),
+    h('nav', { class: 'nav' },
+      h('a', { href: '/docs/' }, 'Docs'),
+      h('button', {
+        class: state.view === 'previews' ? 'active' : '',
+        onClick: () => { state.view = 'previews'; render(); if (!state.previews) loadPreviews(); },
+      }, 'Previews'),
+      h('button', {
+        class: state.view === 'secrets' ? 'active' : '',
+        onClick: () => { state.view = 'secrets'; render(); },
+      }, 'Secrets'),
+      h('button', {
+        onClick: () => {
+          if (!confirm('Se déconnecter ?')) return;
+          localStorage.removeItem(TOKEN_KEY);
+          state.token = ''; state.previews = null; state.secrets = null;
+          render();
+        },
+      }, 'Logout'),
+    ),
+  );
+}
+
+function viewPreviews() {
+  const previews = state.previews;
+  const counts = { all: 0, running: 0, building: 0, failed: 0, expired: 0 };
+  if (previews) {
+    counts.all = previews.length;
+    for (const p of previews) {
+      if (counts[p.status] != null) counts[p.status]++;
+    }
+  }
+
+  const filtered = previews
+    ? (state.filter === 'all' ? previews : previews.filter(p => p.status === state.filter))
+    : [];
+
+  const sorted = [...filtered].sort((a, b) =>
+    new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)
+  );
+
+  const tabs = ['all', 'running', 'building', 'failed', 'expired'].map(k =>
+    h('button', {
+      class: 'tab' + (state.filter === k ? ' active' : ''),
+      onClick: () => { state.filter = k; render(); },
+    }, k.toUpperCase(), h('span', { class: 'count' }, String(counts[k])))
+  );
+
+  let body;
+  if (previews === null) {
+    body = h('div', { class: 'state' },
+      h('div', { class: 'spinner' }),
+      h('div', { class: 'title' }, 'Chargement des previews…'),
+    );
+  } else if (state.previewsErr) {
+    body = h('div', { class: 'state' },
+      h('div', { class: 'title' }, 'Erreur'),
+      h('div', { class: 'sub' }, state.previewsErr),
+      h('button', { class: 'btn', style: 'margin-top: 16px;', onClick: loadPreviews }, 'Réessayer'),
+    );
+  } else if (sorted.length === 0) {
+    body = h('div', { class: 'state' },
+      h('div', { class: 'title' }, 'Aucune preview'),
+      h('div', { class: 'sub' }, state.filter === 'all'
+        ? 'Ouvre une PR sur un repo avec .hatch.yml pour voir apparaître des previews.'
+        : `Aucune preview avec le statut "${state.filter}".`),
+    );
+  } else {
+    const rows = sorted.map(p =>
+      h('tr', {},
+        h('td', { class: 'repo' },
+          p.repo_full_name,
+          h('span', { class: 'pr-num' }, `#${p.pr_number}`),
+        ),
+        h('td', {}, h('span', { class: 'badge ' + p.status }, p.status || 'unknown')),
+        h('td', { class: 'meta hide-sm' },
+          h('span', { class: 'branch' }, p.branch || '—'),
+          ' · ',
+          p.commit_sha ? h('code', {}, shortSha(p.commit_sha)) : '—',
+        ),
+        h('td', { class: 'url hide-sm' },
+          p.url
+            ? h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.url.replace(/^https?:\/\//, ''))
+            : h('span', { class: 'meta' }, '—'),
+        ),
+        h('td', { class: 'when hide-sm' }, timeAgo(p.updated_at || p.created_at)),
+        h('td', {},
+          h('div', { class: 'actions' },
+            p.url && h('a', {
+              href: p.url, target: '_blank', rel: 'noopener',
+              class: 'btn-icon', title: 'Open preview', html: svgIcon('open'),
+            }),
+            h('button', {
+              class: 'btn-icon', title: 'View logs',
+              onClick: () => actionViewLogs(p), html: svgIcon('logs'),
+            }),
+            h('button', {
+              class: 'btn-icon', title: 'Redeploy',
+              onClick: () => actionRedeploy(p), html: svgIcon('redeploy'),
+            }),
+            h('button', {
+              class: 'btn-icon danger', title: 'Stop & destroy',
+              onClick: () => actionStop(p), html: svgIcon('stop'),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    body = h('div', { class: 'card' },
+      h('table', { class: 'previews' },
+        h('thead', {},
+          h('tr', {},
+            h('th', {}, 'Repo / PR'),
+            h('th', {}, 'Status'),
+            h('th', { class: 'hide-sm' }, 'Branch / SHA'),
+            h('th', { class: 'hide-sm' }, 'Preview URL'),
+            h('th', { class: 'hide-sm' }, 'Updated'),
+            h('th', { style: 'text-align: right' }, 'Actions'),
+          ),
+        ),
+        h('tbody', {}, ...rows),
+      ),
+    );
+  }
+
+  return h('main', {},
+    h('div', { class: 'page-head' },
+      h('div', {},
+        h('h1', {}, 'Previews'),
+        h('p', {}, 'Preview deployments actifs — une par pull request.'),
+      ),
+      h('button', { class: 'btn', onClick: loadPreviews }, h('span', { html: svgIcon('redeploy') }), 'Refresh'),
+    ),
+    h('div', { class: 'tabs' }, ...tabs),
+    body,
+  );
+}
+
+function viewSecrets() {
+  const onSearch = (e) => {
+    e.preventDefault();
+    const input = form.querySelector('input');
+    state.secretsRepo = input.value.trim();
+    loadSecrets();
+  };
+
+  const form = h('form', { class: 'secrets-head', onSubmit: onSearch },
+    h('input', {
+      type: 'text', placeholder: 'owner/repo (ex: itsaam/hatch-demo-node)',
+      value: state.secretsRepo, required: true,
+    }),
+    h('button', { class: 'btn primary', type: 'submit' }, 'Charger'),
+    state.secretsRepo && h('button', {
+      class: 'btn', type: 'button',
+      onClick: () => { state.modal = { type: 'addSecret' }; render(); },
+    }, h('span', { html: svgIcon('add') }), 'Ajouter un secret'),
+  );
+
+  let body;
+  if (!state.secretsRepo) {
+    body = h('div', { class: 'state' },
+      h('div', { class: 'title' }, 'Sélectionne un repo'),
+      h('div', { class: 'sub' }, 'Les secrets sont stockés par repository GitHub.'),
+    );
+  } else if (state.secrets === null) {
+    body = h('div', { class: 'state' }, h('div', { class: 'spinner' }), h('div', { class: 'title' }, 'Chargement…'));
+  } else if (state.secretsErr) {
+    body = h('div', { class: 'state' },
+      h('div', { class: 'title' }, 'Erreur'),
+      h('div', { class: 'sub' }, state.secretsErr),
+    );
+  } else if (state.secrets.length === 0) {
+    body = h('div', { class: 'state' },
+      h('div', { class: 'title' }, 'Aucun secret'),
+      h('div', { class: 'sub' }, `Aucun secret enregistré pour ${state.secretsRepo}.`),
+    );
+  } else {
+    const items = state.secrets.map(s => {
+      const name = typeof s === 'string' ? s : (s.name || '');
+      return h('li', { class: 'secret-item' },
+        h('div', {},
+          h('span', { class: 'name' }, name),
+          h('span', { class: 'value-hint' }, '••••••••'),
+        ),
+        h('button', {
+          class: 'btn-icon danger', title: 'Supprimer',
+          onClick: () => actionDeleteSecret(name), html: svgIcon('trash'),
+        }),
+      );
+    });
+    body = h('div', { class: 'card' }, h('ul', { class: 'secrets-list' }, ...items));
+  }
+
+  return h('main', {},
+    h('div', { class: 'page-head' },
+      h('div', {},
+        h('h1', {}, 'Secrets'),
+        h('p', {}, 'Variables d\'environnement chiffrées, injectées dans les previews au déploiement.'),
+      ),
+    ),
+    form,
+    body,
+  );
+}
+
+function viewModal() {
+  if (!state.modal) return null;
+
+  if (state.modal.type === 'logs') {
+    const { preview, logs, err } = state.modal;
+    const body = err
+      ? h('div', { class: 'state' }, h('div', { class: 'title' }, 'Erreur'), h('div', { class: 'sub' }, err))
+      : logs === null
+        ? h('div', { class: 'state' }, h('div', { class: 'spinner' }), h('div', { class: 'title' }, 'Chargement des logs…'))
+        : h('div', { class: 'logs' }, logs || '(vide)');
+
+    return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) { state.modal = null; render(); } } },
+      h('div', { class: 'modal' },
+        h('div', { class: 'modal-head' },
+          h('div', {},
+            h('h3', {}, `Logs — ${preview.repo_full_name} #${preview.pr_number}`),
+            h('div', { class: 'sub' }, `${preview.branch || '—'} · ${shortSha(preview.commit_sha)}`),
+          ),
+          h('button', { class: 'btn-icon', onClick: () => { state.modal = null; render(); }, html: svgIcon('close') }),
+        ),
+        h('div', { class: 'modal-body' }, body),
+      ),
+    );
+  }
+
+  if (state.modal.type === 'addSecret') {
+    const onSubmit = (e) => {
+      e.preventDefault();
+      const name = e.target.querySelector('[name=name]').value.trim();
+      const value = e.target.querySelector('[name=value]').value;
+      if (!name || !value) return;
+      actionAddSecret(name, value);
+    };
+    return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) { state.modal = null; render(); } } },
+      h('div', { class: 'modal sm' },
+        h('div', { class: 'modal-head' },
+          h('div', {},
+            h('h3', {}, 'Nouveau secret'),
+            h('div', { class: 'sub' }, state.secretsRepo),
+          ),
+          h('button', { class: 'btn-icon', onClick: () => { state.modal = null; render(); }, html: svgIcon('close') }),
+        ),
+        h('form', { onSubmit },
+          h('div', { class: 'modal-body' },
+            h('div', { class: 'field' },
+              h('label', {}, 'Nom'),
+              h('input', { name: 'name', type: 'text', placeholder: 'STRIPE_SECRET_KEY', required: true, autofocus: true }),
+            ),
+            h('div', { class: 'field' },
+              h('label', {}, 'Valeur'),
+              h('input', { name: 'value', type: 'password', placeholder: 'sk_test_...', required: true }),
+            ),
+          ),
+          h('div', { class: 'modal-foot' },
+            h('button', { type: 'button', class: 'btn', onClick: () => { state.modal = null; render(); } }, 'Annuler'),
+            h('button', { type: 'submit', class: 'btn primary' }, 'Ajouter'),
+          ),
+        ),
+      ),
+    );
+  }
+  return null;
+}
+
+// ---------- render ----------
+function render() {
+  const root = document.getElementById('root');
+  root.innerHTML = '';
+
+  if (!state.token) {
+    root.appendChild(viewLogin());
+    return;
+  }
+
+  root.appendChild(viewTopBar());
+  if (state.view === 'previews') root.appendChild(viewPreviews());
+  else if (state.view === 'secrets') root.appendChild(viewSecrets());
+
+  const modal = viewModal();
+  if (modal) root.appendChild(modal);
+}
+
+// ESC to close modal
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.modal) { state.modal = null; render(); }
+});
+
+// boot
+render();
+if (state.token) loadPreviews();
+</script>
+</body>
+</html>

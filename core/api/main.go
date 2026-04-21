@@ -34,6 +34,9 @@ var migrationPreviewsComment string
 //go:embed migrations/004_preview_expired_status.sql
 var migrationPreviewExpired string
 
+//go:embed migrations/005_repo_secrets.sql
+var migrationRepoSecrets string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -63,7 +66,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
@@ -110,8 +113,8 @@ func main() {
 	r.Use(middleware.Timeout(10 * time.Second))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{allowedOrigin},
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders: []string{"Content-Type"},
+		AllowedMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Content-Type", "Authorization"},
 		MaxAge:         300,
 	}))
 
@@ -130,6 +133,25 @@ func main() {
 	})
 
 	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient))
+
+	// Secret store — gated by HATCH_ADMIN_TOKEN (bearer). See secrets_handlers.go.
+	r.Route("/api/secrets", func(r chi.Router) {
+		r.Use(requireAdminToken)
+		r.Use(httprate.LimitByIP(30, time.Minute))
+		r.Post("/", upsertSecretHandler(pool))
+		r.Get("/", listSecretsHandler(pool))
+		r.Delete("/", deleteSecretHandler(pool))
+	})
+
+	// Preview admin endpoints — gated by HATCH_ADMIN_TOKEN. See previews_handlers.go.
+	r.Route("/api/previews", func(r chi.Router) {
+		r.Use(requireAdminToken)
+		r.Use(httprate.LimitByIP(30, time.Minute))
+		r.Get("/", listPreviewsHandler(pool))
+		r.Get("/{owner}/{repo}/{pr}/logs", previewLogsHandler(pool, deployer))
+		r.Post("/{owner}/{repo}/{pr}/redeploy", previewRedeployHandler(pool, deployer))
+		r.Delete("/{owner}/{repo}/{pr}", previewDestroyHandler(pool, deployer))
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + port,

@@ -69,6 +69,16 @@ type dockerHealthcheck struct {
 // deployCompose orchestrates a full stack deploy for a preview.
 func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *ComposeSpec, app *AppClient) error {
 	slug := slugify(ref.Repo)
+
+	// Load repo secrets up-front. A DB error here is non-fatal: we log and
+	// carry on with no secrets — the deploy still succeeds, just without
+	// env-injection.
+	secrets, err := loadRepoSecrets(ctx, d.pool, ref.Repo)
+	if err != nil {
+		log.Printf("load secrets %s: %v (continuing without)", ref.Repo, err)
+		secrets = map[string]string{}
+	}
+
 	sctx := SubstitutionContext{
 		PR:         ref.PR,
 		SHA:        ref.SHA,
@@ -76,8 +86,29 @@ func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *Comp
 		Slug:       slug,
 		DBPassword: DeriveDBPassword(webhookSecretFromEnv(), ref.Repo, ref.PR),
 		Domain:     d.domain,
+		Secrets:    secrets,
 	}
 	Substitute(spec, sctx)
+
+	// Inject every repo secret as a plain env var on every service, unless the
+	// service already defines a var with that name (explicit .hatch.yml wins).
+	// This means storing a STRIPE_SECRET_KEY in the DB is enough to have it
+	// available in all containers without touching the yml.
+	if len(secrets) > 0 {
+		for _, svc := range spec.Services {
+			if svc == nil {
+				continue
+			}
+			if svc.Env == nil {
+				svc.Env = make(map[string]string, len(secrets))
+			}
+			for k, v := range secrets {
+				if _, exists := svc.Env[k]; !exists {
+					svc.Env[k] = v
+				}
+			}
+		}
+	}
 
 	order, err := TopoSortServices(spec)
 	if err != nil {

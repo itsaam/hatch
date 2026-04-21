@@ -22,6 +22,16 @@ export default function TopBar() {
         onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--border-strong)' }}
         onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-mute)'; e.currentTarget.style.borderColor = 'var(--border)' }}
         >DOCS</a>
+        <a href="/app/" className="mono" style={{
+          fontSize: 12, letterSpacing: '0.08em',
+          color: 'var(--text-mute)', textTransform: 'uppercase',
+          padding: '6px 12px', borderRadius: 999,
+          border: '1px solid var(--border)',
+          transition: 'all .25s var(--ease)'
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--border-strong)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-mute)'; e.currentTarget.style.borderColor = 'var(--border)' }}
+        >APP</a>
         <a href="https://github.com/itsaam/hatch" target="_blank" rel="noopener" className="mono" style={{
           fontSize: 12, letterSpacing: '0.08em',
           color: 'var(--text)', textTransform: 'uppercase',
