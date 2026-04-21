@@ -1,0 +1,24 @@
+# Exclude everything by default
+*
+
+# Keep only what we ship
+!install.js
+!bin/.gitkeep
+!README.md
+!LICENSE
+!package.json
+
+# Never ship the downloaded binary — it's fetched at install time
+bin/hatch
+bin/hatch.exe
+
+# Dev noise
+.DS_Store
+node_modules/
+*.log
+*.tgz
+.env
+test/
+tests/
+__tests__/
+*.test.js

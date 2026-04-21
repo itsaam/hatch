@@ -4,10 +4,26 @@ Zero-config `.hatch.yml` generator.
 
 ## Install
 
-```sh
+### npm (recommended for Node devs)
+```bash
+npx @hatchpr/cli init
+# or install globally:
+npm install -g @hatchpr/cli
+```
+
+### curl (macOS/Linux)
+```bash
+curl -fsSL https://hatchpr.dev/install.sh | sh
+```
+
+### Go install (if you have Go)
+```bash
 go install github.com/itsaam/hatch/cli@latest
-# or build locally
-cd cli && go build -ldflags="-s -w" -o hatch .
+```
+
+### From source
+```bash
+git clone https://github.com/itsaam/hatch && cd hatch/cli && go build -o hatch .
 ```
 
 Cross-compile:

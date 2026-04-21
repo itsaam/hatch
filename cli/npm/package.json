@@ -1,0 +1,49 @@
+{
+  "name": "@hatchpr/cli",
+  "version": "0.0.1",
+  "description": "CLI for Hatch — self-hosted PR preview deployments (scaffold .hatch.yml auto-detecté)",
+  "bin": {
+    "hatch": "bin/hatch"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "install.js",
+    "bin/.gitkeep",
+    "README.md"
+  ],
+  "keywords": [
+    "hatch",
+    "preview",
+    "deployments",
+    "docker",
+    "pr",
+    "ci-cd",
+    "github",
+    "self-hosted"
+  ],
+  "author": "Samy Abdelmalek",
+  "license": "MIT",
+  "homepage": "https://hatchpr.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itsaam/hatch.git",
+    "directory": "cli/npm"
+  },
+  "bugs": {
+    "url": "https://github.com/itsaam/hatch/issues"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

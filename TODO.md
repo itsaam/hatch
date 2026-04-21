@@ -125,3 +125,16 @@ services:
 - [ ] Reddit /r/devops — draft prêt
 - [ ] Twitter/X thread — draft prêt
 - [ ] LinkedIn post — draft prêt
+
+## Release workflow
+
+1. Bump la version dans `cli/npm/package.json`
+2. Commit
+3. Tag : `git tag v0.1.0 && git push --tags`
+4. GitHub Actions (GoReleaser) build + publish les 5 binaires sur GitHub Releases automatiquement
+5. Publish npm : `cd cli/npm && npm publish --access public`
+
+**Pré-requis** (une fois) :
+- `npm login` avec un compte npm (gratuit)
+- Créer l'organisation `@hatchpr` sur npmjs.com (gratuit)
+- Aucun secret GitHub à configurer : `GITHUB_TOKEN` est auto-provisionné dans les Actions.
