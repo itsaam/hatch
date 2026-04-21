@@ -28,6 +28,7 @@ const (
 	commentReady     = "✅ Preview ready: %s"
 	commentFailed    = "❌ Preview failed. Check the API logs for details."
 	commentTakenDown = "🧹 Preview taken down."
+	commentHibernate = "💤 Preview hibernated after %d days of inactivity."
 )
 
 type prEvent struct {
@@ -89,6 +90,27 @@ func (n *prNotifier) OnStatusChange(ctx context.Context, ref PreviewRef, status,
 	if err := n.app.UpdateComment(cctx, ref.InstallationID, owner, repo, ref.CommentID, body); err != nil {
 		log.Printf("update pr comment %s#%d: %v", ref.Repo, ref.PR, err)
 	}
+}
+
+// OnHibernated satisfies the hibernateNotifier contract for the reaper.
+func (n *prNotifier) OnHibernated(ctx context.Context, ref PreviewRef, days int) {
+	if n == nil || n.app == nil {
+		return
+	}
+	if ref.InstallationID == 0 || ref.CommentID == 0 {
+		return
+	}
+	owner, repo, ok := splitRepo(ref.Repo)
+	if !ok {
+		return
+	}
+	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	body := fmtSafe(commentHibernate, days)
+	if err := n.app.UpdateComment(cctx, ref.InstallationID, owner, repo, ref.CommentID, body); err != nil {
+		log.Printf("hibernate comment %s#%d: %v", ref.Repo, ref.PR, err)
+	}
+	_ = ctx
 }
 
 func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient) http.HandlerFunc {

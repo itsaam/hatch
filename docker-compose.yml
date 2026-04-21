@@ -73,6 +73,8 @@ services:
       GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-app.pem
       HATCH_NETWORK: hatch_public
       HATCH_DOMAIN: ${HATCH_DOMAIN:-localhost}
+      PREVIEW_TTL_HOURS: ${PREVIEW_TTL_HOURS:-168}
+      PREVIEW_REAPER_INTERVAL_MINUTES: ${PREVIEW_REAPER_INTERVAL_MINUTES:-60}
       PORT: "8080"
     ports:
       - "127.0.0.1:8080:8080"

@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +31,9 @@ var migrationPreviews string
 //go:embed migrations/003_previews_comment.sql
 var migrationPreviewsComment string
 
+//go:embed migrations/004_preview_expired_status.sql
+var migrationPreviewExpired string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -42,6 +47,11 @@ func main() {
 	hatchNetwork := getenv("HATCH_NETWORK", "hatch_public")
 	hatchDomain := getenv("HATCH_DOMAIN", "localhost")
 	port := getenv("PORT", "8080")
+	ttlHours := getenvInt("PREVIEW_TTL_HOURS", 168)
+	reaperMinutes := getenvInt("PREVIEW_REAPER_INTERVAL_MINUTES", 60)
+
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -53,7 +63,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
@@ -82,6 +92,16 @@ func main() {
 	}
 
 	deployer.SetNotifier(&prNotifier{pool: pool, app: appClient})
+
+	reconcileCtx, reconcileCancel := context.WithTimeout(rootCtx, 30*time.Second)
+	if err := deployer.Reconcile(reconcileCtx, pool); err != nil {
+		log.Printf("reconcile failed (non-fatal): %v", err)
+	}
+	reconcileCancel()
+
+	deployer.StartTTLReaper(rootCtx, pool,
+		time.Duration(ttlHours)*time.Hour,
+		time.Duration(reaperMinutes)*time.Minute)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -115,10 +135,45 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	log.Printf("hatch api listening on :%s", port)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+
+	serverErr := make(chan error, 1)
+	go func() {
+		log.Printf("hatch api listening on :%s", port)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+		}
+		close(serverErr)
+	}()
+
+	select {
+	case <-rootCtx.Done():
+		log.Printf("shutdown signal received")
+	case err := <-serverErr:
+		if err != nil {
+			log.Fatalf("server error: %v", err)
+		}
+		return
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown: %v", err)
+	}
+	log.Printf("hatch api stopped")
+}
+
+func getenvInt(k string, def int) int {
+	v := os.Getenv(k)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		log.Printf("invalid %s=%q, using default %d", k, v, def)
+		return def
+	}
+	return n
 }
 
 func subscribeHandler(pool *pgxpool.Pool) http.HandlerFunc {
