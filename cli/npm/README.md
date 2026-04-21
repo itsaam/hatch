@@ -1,4 +1,4 @@
-# @hatchpr-preview/cli
+# @hatchpr/cli
 
 Official npm wrapper for the [Hatch](https://hatchpr.dev) CLI — self-hosted PR preview deployments.
 
@@ -8,10 +8,10 @@ The native Go binary is downloaded from GitHub Releases on install, matching you
 
 ```sh
 # One-shot use
-npx @hatchpr-preview/cli init
+npx @hatchpr/cli init
 
 # Or install globally
-npm install -g @hatchpr-preview/cli
+npm install -g @hatchpr/cli
 hatch init
 ```
 

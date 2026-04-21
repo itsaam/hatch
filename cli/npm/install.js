@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Postinstall script for @hatchpr-preview/cli.
+ * Postinstall script for @hatchpr/cli.
  *
  * Downloads the matching hatch binary from GitHub Releases, verifies its
  * SHA-256 checksum, extracts it, and places it at bin/hatch (or bin/hatch.exe).
@@ -65,7 +65,7 @@ function resolvePlatform() {
 // ── HTTP helpers ───────────────────────────────────────────────────────────
 function httpGet(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': '@hatchpr-preview/cli-installer' } }, (res) => {
+    const req = https.get(url, { headers: { 'User-Agent': '@hatchpr/cli-installer' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         if (redirectsLeft <= 0) return reject(new Error('Too many redirects'));
         res.resume();
@@ -153,18 +153,18 @@ function alreadyInstalled() {
 async function run() {
   // Skip during local dev linking, CI dry-runs, etc.
   if (process.env.HATCH_SKIP_DOWNLOAD === '1') {
-    console.log('[@hatchpr-preview/cli] HATCH_SKIP_DOWNLOAD=1 — skipping binary download.');
+    console.log('[@hatchpr/cli] HATCH_SKIP_DOWNLOAD=1 — skipping binary download.');
     return;
   }
 
   const p = resolvePlatform();
 
   if (alreadyInstalled()) {
-    console.log(`[@hatchpr-preview/cli] hatch v${VERSION} already installed at ${BIN_PATH}`);
+    console.log(`[@hatchpr/cli] hatch v${VERSION} already installed at ${BIN_PATH}`);
     return;
   }
 
-  console.log(`[@hatchpr-preview/cli] Downloading hatch v${VERSION} for ${p.label}…`);
+  console.log(`[@hatchpr/cli] Downloading hatch v${VERSION} for ${p.label}…`);
 
   if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
@@ -176,7 +176,7 @@ async function run() {
       await downloadToFile(p.archiveUrl, archivePath);
     } catch (err) {
       if (n < 2) {
-        console.warn(`[@hatchpr-preview/cli] Download failed (${err.message}) — retrying…`);
+        console.warn(`[@hatchpr/cli] Download failed (${err.message}) — retrying…`);
         return attempt(n + 1);
       }
       throw err;
@@ -195,7 +195,7 @@ async function run() {
     throw err;
   }
 
-  console.log('[@hatchpr-preview/cli] Verifying checksum…');
+  console.log('[@hatchpr/cli] Verifying checksum…');
   const checksumsText = await downloadToString(p.checksumUrl);
   const expected = findChecksumFor(checksumsText, p.archive);
   if (!expected) {
@@ -208,7 +208,7 @@ async function run() {
     );
   }
 
-  console.log('[@hatchpr-preview/cli] Extracting…');
+  console.log('[@hatchpr/cli] Extracting…');
   extract(archivePath, tmpDir, p.ext);
 
   // Locate the binary inside the extracted files
@@ -224,11 +224,11 @@ async function run() {
   // Best-effort cleanup
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
-  console.log(`[@hatchpr-preview/cli] Done. Installed hatch v${VERSION} → ${BIN_PATH}`);
+  console.log(`[@hatchpr/cli] Done. Installed hatch v${VERSION} → ${BIN_PATH}`);
 }
 
 run().catch((err) => {
-  console.error(`[@hatchpr-preview/cli] Install failed: ${err.message}`);
+  console.error(`[@hatchpr/cli] Install failed: ${err.message}`);
   console.error(
     `\nYou can still install hatch manually:\n` +
     `  curl -fsSL https://hatchpr.dev/install.sh | sh\n` +

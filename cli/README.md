@@ -6,9 +6,9 @@ Zero-config `.hatch.yml` generator.
 
 ### npm (recommended for Node devs)
 ```bash
-npx @hatchpr-preview/cli init
+npx @hatchpr/cli init
 # or install globally:
-npm install -g @hatchpr-preview/cli
+npm install -g @hatchpr/cli
 ```
 
 ### curl (macOS/Linux)
