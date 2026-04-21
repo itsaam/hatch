@@ -1,0 +1,29 @@
+#!/usr/bin/env node
+/*
+ * Thin wrapper that locates the native hatch binary (downloaded by
+ * install.js into vendor/hatch) and execs it with the user's args.
+ *
+ * Why a JS wrapper? npm's bin symlink (.bin/hatch -> bin/hatch) is only
+ * created if the target file exists in the published tarball. The native
+ * Go binary is platform-specific and downloaded at postinstall, so it
+ * can't be shipped. This JS shim ships instead and forwards calls.
+ */
+'use strict';
+
+const { spawnSync } = require('child_process');
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+
+const binaryName = os.platform() === 'win32' ? 'hatch.exe' : 'hatch';
+const binaryPath = path.join(__dirname, '..', 'vendor', binaryName);
+
+if (!fs.existsSync(binaryPath)) {
+  console.error('[@hatchpr/cli] Native binary not found at ' + binaryPath);
+  console.error('[@hatchpr/cli] The postinstall step may have failed.');
+  console.error('[@hatchpr/cli] Try: npm install -g @hatchpr/cli --foreground-scripts');
+  process.exit(1);
+}
+
+const result = spawnSync(binaryPath, process.argv.slice(2), { stdio: 'inherit' });
+process.exit(result.status == null ? 1 : result.status);

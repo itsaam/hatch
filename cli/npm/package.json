@@ -1,6 +1,6 @@
 {
   "name": "@hatchpr/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI for Hatch — self-hosted PR preview deployments (scaffold .hatch.yml auto-detecté)",
   "bin": {
     "hatch": "bin/hatch"
@@ -10,8 +10,10 @@
   },
   "files": [
     "install.js",
-    "bin/.gitkeep",
-    "README.md"
+    "bin/hatch",
+    "vendor/.gitkeep",
+    "README.md",
+    "LICENSE"
   ],
   "keywords": [
     "hatch",

@@ -21,7 +21,7 @@ const REPO = 'itsaam/hatch';
 const PKG = require('./package.json');
 const VERSION = PKG.version;
 
-const BIN_DIR = path.join(__dirname, 'bin');
+const BIN_DIR = path.join(__dirname, 'vendor');
 const IS_WINDOWS = os.platform() === 'win32';
 const BIN_NAME = IS_WINDOWS ? 'hatch.exe' : 'hatch';
 const BIN_PATH = path.join(BIN_DIR, BIN_NAME);
