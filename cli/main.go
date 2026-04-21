@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -76,6 +77,8 @@ func runInit(argv []string) error {
 	output := fs.String("output", ".hatch.yml", "output path")
 	verbose := fs.Bool("verbose", false, "verbose logs")
 	noAnim := fs.Bool("no-animation", false, "disable step delays")
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	fs.BoolVar(yes, "y", false, "skip confirmation prompt (short)")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -142,11 +145,19 @@ func runInit(argv []string) error {
 	if _, err := os.Stat(outPath); err == nil && !*force {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", outPath)
 	}
+
+	// Résumé d'abord, puis confirmation sauf si --yes.
+	printSummary(ui, yaml, result, filepath.Base(outPath), false)
+	if !*yes && !confirm(ui, "Create "+filepath.Base(outPath)+"?") {
+		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(os.Stdout, ui.Muted("Aborted. No file written."))
+		return nil
+	}
+
 	if err := os.WriteFile(outPath, []byte(yaml), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", outPath, err)
 	}
-
-	printSummary(ui, yaml, result, filepath.Base(outPath), false)
+	ui.OK(filepath.Base(outPath) + " written (" + fmt.Sprintf("%d", strings.Count(yaml, "\n")) + " lines)")
 
 	if len(result.Warnings) > 0 {
 		ui.Blank()
@@ -155,6 +166,22 @@ func runInit(argv []string) error {
 		}
 	}
 	return nil
+}
+
+// confirm lit une réponse Y/n sur stdin. Default Y.
+// Si pas de TTY (pipe/CI), considère "yes" par défaut pour que les scripts marchent.
+func confirm(ui *UI, prompt string) bool {
+	if !ui.Interactive {
+		return true
+	}
+	fmt.Fprint(os.Stdout, "\n  "+ui.Accent("?")+" "+prompt+" "+ui.Muted("[Y/n]")+" ")
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(strings.ToLower(line))
+	return trimmed == "" || trimmed == "y" || trimmed == "yes" || trimmed == "o" || trimmed == "oui"
 }
 
 func reportDetection(ui *UI, filesys FS, r *DetectResult, verbose bool) {
