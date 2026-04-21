@@ -50,7 +50,10 @@ services:
       - traefik.http.services.hatch-api.loadbalancer.server.port=8080
 
   landing:
-    build: ./landing
+    build:
+      context: ./landing
+      args:
+        VITE_API_URL: https://api.${HATCH_DOMAIN}
     restart: unless-stopped
     networks:
       - dokploy-network
