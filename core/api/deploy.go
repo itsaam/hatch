@@ -116,7 +116,7 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 	lock.Lock()
 	defer lock.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 
 	slug := slugify(ref.Repo)
@@ -224,7 +224,7 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installatio
 
 	resp, err := d.http.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("build request: %w", scrubToken(err))
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -237,6 +237,18 @@ func (d *Deployer) build(ctx context.Context, repo, sha, tag string, installatio
 		return fmt.Errorf("build stream error: %s", truncateTail(string(body), 1200))
 	}
 	return nil
+}
+
+// scrubToken redacts `x-access-token:ghs_...@github.com` credentials from
+// error strings so tokens don't leak into logs.
+var tokenRE = regexp.MustCompile(`x-access-token:[^@]+@`)
+
+func scrubToken(err error) error {
+	if err == nil {
+		return nil
+	}
+	s := tokenRE.ReplaceAllString(err.Error(), "x-access-token:REDACTED@")
+	return errors.New(s)
 }
 
 // truncateTail keeps the last n chars — Docker build errors are typically
