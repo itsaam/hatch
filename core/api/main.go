@@ -167,6 +167,7 @@ func main() {
 		r.Use(httprate.LimitByIP(30, time.Minute))
 		r.Get("/", listPreviewsHandler(pool))
 		r.Get("/{owner}/{repo}/{pr}/logs", previewLogsHandler(pool, deployer))
+		r.Get("/{owner}/{repo}/{pr}/logs/stream", previewLogsStreamHandler(pool, deployer))
 		r.Post("/{owner}/{repo}/{pr}/redeploy", previewRedeployHandler(pool, deployer))
 		r.Delete("/{owner}/{repo}/{pr}", previewDestroyHandler(pool, deployer))
 	})

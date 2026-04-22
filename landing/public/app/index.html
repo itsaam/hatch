@@ -590,9 +590,10 @@ async function fetchLogsFor(p) {
 }
 
 async function actionViewLogs(p) {
-  // Cancel any previous poller for safety.
+  // Cancel any previous poller / stream for safety.
   if (state.modal && state.modal._timer) clearInterval(state.modal._timer);
-  state.modal = { type: 'logs', preview: p, data: null, err: null, _timer: null };
+  if (state.modal && state.modal._abort) state.modal._abort.abort();
+  state.modal = { type: 'logs', preview: p, data: null, err: null, _timer: null, _abort: null };
   render();
 
   // Builds reach a terminal state when every service is success or failed.
@@ -719,8 +720,79 @@ async function actionViewLogs(p) {
     }
   };
 
+  // Apply a parsed payload exactly like `refresh()` would — used by both
+  // the SSE stream handler and the polling fallback.
+  const apply = (next) => {
+    if (!state.modal || state.modal.type !== 'logs' || state.modal.preview !== p) return;
+    const prev = state.modal.data;
+    state.modal.data = next;
+    state.modal.err = null;
+    const structureChanged = !prev
+      || prev.kind !== next.kind
+      || (next.kind === 'build' && !canPatch(next));
+    if (structureChanged) render(); else patch(next);
+  };
+
+  // Try SSE via fetch() streaming first (supports Bearer header, unlike
+  // EventSource). Fallback to polling on any failure.
+  const startStream = async () => {
+    const [owner, repo] = p.repo_full_name.split('/');
+    const url = `${API_BASE}/api/previews/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${p.pr_number}/logs/stream`;
+    const abort = new AbortController();
+    state.modal._abort = abort;
+    let res;
+    try {
+      res = await fetch(url, {
+        headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+        signal: abort.signal,
+      });
+    } catch (e) {
+      return false;
+    }
+    if (!res.ok || !res.body) return false;
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('text/event-stream')) return false;
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    (async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n\n')) !== -1) {
+            const frame = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            let event = '';
+            let data = '';
+            for (const line of frame.split('\n')) {
+              if (line.startsWith(':')) continue;
+              if (line.startsWith('event: ')) event = line.slice(7);
+              else if (line.startsWith('data: ')) data += (data ? '\n' : '') + line.slice(6);
+            }
+            if (!data) continue;
+            if (event === 'done') { abort.abort(); return; }
+            try { apply(JSON.parse(data)); } catch {}
+          }
+        }
+      } catch {
+        // stream died — fall back to polling if modal still open
+        if (state.modal && state.modal.type === 'logs' && state.modal.preview === p && !state.modal._timer) {
+          state.modal._timer = setInterval(refresh, 2500);
+        }
+      }
+    })();
+    return true;
+  };
+
   await refresh();
-  state.modal._timer = setInterval(refresh, 2500);
+  const streaming = await startStream();
+  if (!streaming) {
+    state.modal._timer = setInterval(refresh, 2500);
+  }
 }
 
 function actionRedeploy(p) {
@@ -1073,6 +1145,7 @@ function viewModal() {
 
     const closeModal = () => {
       if (state.modal && state.modal._timer) clearInterval(state.modal._timer);
+      if (state.modal && state.modal._abort) state.modal._abort.abort();
       state.modal = null;
       render();
     };

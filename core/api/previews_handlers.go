@@ -10,12 +10,14 @@ package main
 // Routes:
 //   GET    /api/previews                                  — list all previews
 //   GET    /api/previews/{owner}/{repo}/{pr}/logs         — docker logs (last 200 lines)
+//   GET    /api/previews/{owner}/{repo}/{pr}/logs/stream  — SSE stream of logs
 //   POST   /api/previews/{owner}/{repo}/{pr}/redeploy     — queue a redeploy
 //   DELETE /api/previews/{owner}/{repo}/{pr}              — force destroy
 
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -234,6 +236,156 @@ func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"kind": "build", "services": out})
+	}
+}
+
+// previewLogsStreamHandler is the SSE variant of previewLogsHandler. It keeps
+// a single long-lived HTTP connection open and pushes the same payload shape
+// every ~750ms. The stream closes on its own once the build is terminal and
+// no runtime container exists, or when the client disconnects.
+func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repo, pr, ok := parsePreviewPath(w, r)
+		if !ok {
+			return
+		}
+
+		verifyCtx, verifyCancel := context.WithTimeout(r.Context(), 5*time.Second)
+		_, found, err := loadPreviewRef(verifyCtx, pool, repo, pr)
+		verifyCancel()
+		if err != nil {
+			log.Printf("logs-stream load %s#%d: %v", repo, pr, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db error"})
+			return
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "preview not found"})
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+			return
+		}
+
+		h := w.Header()
+		h.Set("Content-Type", "text/event-stream")
+		h.Set("Cache-Control", "no-cache, no-transform")
+		h.Set("Connection", "keep-alive")
+		h.Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		send := func(event string, payload any) bool {
+			b, err := json.Marshal(payload)
+			if err != nil {
+				return false
+			}
+			if event != "" {
+				if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
+					return false
+				}
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+				return false
+			}
+			flusher.Flush()
+			return true
+		}
+
+		tick := time.NewTicker(750 * time.Millisecond)
+		defer tick.Stop()
+		keepalive := time.NewTicker(20 * time.Second)
+		defer keepalive.Stop()
+
+		emit := func() (terminal bool, ok bool) {
+			cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+
+			container, cerr := deployer.exposedContainerName(cctx, repo, pr)
+			if cerr != nil {
+				log.Printf("logs-stream locate %s#%d: %v", repo, pr, cerr)
+			}
+			if container != "" {
+				logs, err := deployer.containerLogs(cctx, container, 500)
+				if err == nil {
+					return false, send("", map[string]any{"kind": "runtime", "logs": logs})
+				}
+				if err != errContainerNotFound {
+					log.Printf("logs-stream %s: %v", container, err)
+				}
+			}
+
+			rows, err := pool.Query(cctx, `
+				SELECT DISTINCT ON (service) service, status, COALESCE(raw_output,''), COALESCE(error,''), started_at, completed_at
+				FROM build_logs
+				WHERE repo_full_name=$1 AND pr_number=$2
+				ORDER BY service, started_at DESC
+			`, repo, pr)
+			if err != nil {
+				log.Printf("logs-stream build query %s#%d: %v", repo, pr, err)
+				return false, true
+			}
+			defer rows.Close()
+
+			type buildRow struct {
+				Service     string  `json:"service"`
+				Status      string  `json:"status"`
+				Output      string  `json:"output"`
+				Error       string  `json:"error,omitempty"`
+				StartedAt   string  `json:"started_at"`
+				CompletedAt *string `json:"completed_at,omitempty"`
+			}
+			out := []buildRow{}
+			allTerminal := true
+			for rows.Next() {
+				var b buildRow
+				var started time.Time
+				var completed *time.Time
+				if err := rows.Scan(&b.Service, &b.Status, &b.Output, &b.Error, &started, &completed); err != nil {
+					continue
+				}
+				b.StartedAt = started.UTC().Format(time.RFC3339)
+				if completed != nil {
+					s := completed.UTC().Format(time.RFC3339)
+					b.CompletedAt = &s
+				}
+				if b.Status != "success" && b.Status != "failed" {
+					allTerminal = false
+				}
+				out = append(out, b)
+			}
+			if len(out) == 0 {
+				return false, send("", map[string]any{"kind": "build", "services": out})
+			}
+			return allTerminal && container == "", send("", map[string]any{"kind": "build", "services": out})
+		}
+
+		if _, ok := emit(); !ok {
+			return
+		}
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-tick.C:
+				terminal, ok := emit()
+				if !ok {
+					return
+				}
+				if terminal {
+					send("done", map[string]string{"reason": "build terminal, no runtime"})
+					return
+				}
+			case <-keepalive.C:
+				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+		}
 	}
 }
 
