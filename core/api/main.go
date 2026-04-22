@@ -159,6 +159,8 @@ func main() {
 		r.Post("/", upsertSecretHandler(pool))
 		r.Get("/", listSecretsHandler(pool))
 		r.Delete("/", deleteSecretHandler(pool))
+		r.Get("/export", exportSecretsHandler(pool))
+		r.Post("/import", importSecretsHandler(pool))
 	})
 
 	// Preview admin endpoints — gated by HATCH_ADMIN_TOKEN. See previews_handlers.go.

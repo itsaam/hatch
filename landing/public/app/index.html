@@ -568,8 +568,8 @@ async function loadSecrets() {
 }
 
 // ---------- confirm + toast helpers ----------
-function showConfirm({ title, message, danger, onConfirm }) {
-  state.modal = { type: 'confirm', title, message, danger: !!danger, onConfirm };
+function showConfirm({ title, message, danger, onConfirm, confirmLabel, secondary }) {
+  state.modal = { type: 'confirm', title, message, danger: !!danger, onConfirm, confirmLabel, secondary };
   render();
 }
 
@@ -857,6 +857,82 @@ function actionDeleteSecret(name) {
   });
 }
 
+async function actionExportSecretsBackup() {
+  try {
+    const res = await fetch(API_BASE + '/api/secrets/export', {
+      headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    });
+    if (res.status === 401) { showToast('Non autorisé', 'error'); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0,10);
+    a.download = `hatch-secrets-backup-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    showToast('Backup téléchargé', 'success');
+  } catch (e) {
+    showToast('Export échoué : ' + e.message, 'error');
+  }
+}
+
+function actionImportSecretsBackup() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let text;
+    try { text = await file.text(); }
+    catch (e) { showToast('Lecture du fichier échouée', 'error'); return; }
+
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch { showToast('Fichier JSON invalide', 'error'); return; }
+    const count = (parsed && parsed.secrets && parsed.secrets.length) || 0;
+
+    showConfirm({
+      title: 'Importer le backup',
+      message: `Restaurer depuis "${file.name}" (${count} secrets) ?\n\n"Importer" ajoute uniquement les secrets absents.\n"Écraser" remplace tout secret existant par la version du backup.`,
+      confirmLabel: 'Importer (skip existants)',
+      onConfirm: () => sendBackupImport(text, false),
+      secondary: {
+        label: 'Écraser les existants',
+        onConfirm: () => sendBackupImport(text, true),
+      },
+    });
+  };
+  input.click();
+}
+
+async function sendBackupImport(rawJson, overwrite) {
+  try {
+    const path = '/api/secrets/import' + (overwrite ? '?overwrite=true' : '');
+    const res = await fetch(API_BASE + path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
+      },
+      body: rawJson,
+    });
+    if (res.status === 401) { showToast('Non autorisé', 'error'); return; }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    showToast(`Importé : ${data.imported}, skippé : ${data.skipped}`, 'success');
+    if (state.secretsRepo) loadSecrets();
+  } catch (e) {
+    showToast('Import échoué : ' + e.message, 'error');
+  }
+}
+
 async function actionAddSecret(name, value) {
   try {
     await api('/api/secrets', {
@@ -1131,6 +1207,16 @@ function viewSecrets() {
         h('h1', {}, 'Secrets'),
         h('p', {}, 'Variables d\'environnement chiffrées, injectées dans les previews au déploiement.'),
       ),
+      h('div', { style: 'display: flex; gap: 8px;' },
+        h('button', {
+          class: 'btn', type: 'button', title: 'Télécharger un backup chiffré de tous les secrets',
+          onClick: actionExportSecretsBackup,
+        }, 'Exporter'),
+        h('button', {
+          class: 'btn', type: 'button', title: 'Restaurer depuis un backup JSON',
+          onClick: actionImportSecretsBackup,
+        }, 'Importer'),
+      ),
     ),
     form,
     body,
@@ -1270,9 +1356,10 @@ function viewModal() {
   }
 
   if (state.modal.type === 'confirm') {
-    const { title, message, danger, onConfirm } = state.modal;
+    const { title, message, danger, onConfirm, confirmLabel, secondary } = state.modal;
     const close = () => { state.modal = null; render(); };
     const confirm = async () => { close(); if (onConfirm) await onConfirm(); };
+    const secondaryConfirm = async () => { close(); if (secondary && secondary.onConfirm) await secondary.onConfirm(); };
     return h('div', { class: 'modal-backdrop', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
       h('div', { class: 'modal sm' },
         h('div', { class: 'modal-head' },
@@ -1286,12 +1373,17 @@ function viewModal() {
         ),
         h('div', { class: 'modal-foot' },
           h('button', { type: 'button', class: 'btn', onClick: close }, 'Annuler'),
+          secondary && h('button', {
+            type: 'button',
+            class: 'btn danger',
+            onClick: secondaryConfirm,
+          }, secondary.label || 'Écraser'),
           h('button', {
             type: 'button',
             class: danger ? 'btn danger' : 'btn primary',
             onClick: confirm,
             autofocus: true,
-          }, danger ? 'Confirmer la suppression' : 'Confirmer'),
+          }, confirmLabel || (danger ? 'Confirmer la suppression' : 'Confirmer')),
         ),
       ),
     );
