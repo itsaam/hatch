@@ -60,7 +60,19 @@ type Seed struct {
 }
 
 // Detect inspects fs and returns the best-effort stack description.
+// Post-processing (seed auto-detection, etc.) happens here once for every
+// path that built a DetectResult, so each stack detector can stay focused
+// on its specific signals.
 func Detect(fs FS) (*DetectResult, error) {
+	r, err := detectInner(fs)
+	if err != nil || r == nil {
+		return r, err
+	}
+	applySeedDetection(fs, r)
+	return r, nil
+}
+
+func detectInner(fs FS) (*DetectResult, error) {
 	// Priority 0: repo is hatch itself (edge case).
 	if fs.Exists("landing/package.json") && fs.Exists("core/api/main.go") {
 		return detectHatchRepo(fs)
@@ -777,6 +789,81 @@ func copyEnv(src map[string]string) map[string]string {
 
 // WalkJoin is a small helper for tests to build absolute-ish paths.
 func WalkJoin(parts ...string) string { return filepath.Join(parts...) }
+
+// applySeedDetection looks for a SQL seed file in a handful of conventional
+// locations. If one is found AND a "db" service is present in the detected
+// stack, it wires up result.Seed so the preview database is populated on
+// first boot. Skipped when the caller already filled Seed (e.g. inferred
+// from a docker-compose.yml).
+//
+// Conventions scanned (first hit wins, in this order):
+//   - seed/preview.sql, seeds/preview.sql (explicit preview seed)
+//   - seed/*.sql, seeds/*.sql             (any SQL file, alphabetic)
+//   - db/seed/*.sql, db/seeds/*.sql
+//   - migrations/*.sql, db/migrations/*.sql
+//
+// These are the layouts the wider Node/Go/Python ecosystems converge on.
+// We don't scan random paths to avoid false positives on unrelated SQL
+// dumps (e.g. `tests/fixtures/*.sql`).
+func applySeedDetection(fs FS, r *DetectResult) {
+	if r == nil || r.Seed != nil {
+		return
+	}
+	if !hasService(r, "db") {
+		return
+	}
+	candidates := []string{
+		"seed/preview.sql",
+		"seeds/preview.sql",
+		"db/seed/preview.sql",
+		"db/seeds/preview.sql",
+	}
+	for _, exact := range candidates {
+		if fs.Exists(exact) {
+			r.Seed = &Seed{After: "db", SQL: "./" + exact}
+			return
+		}
+	}
+	dirs := []string{"seed", "seeds", "db/seed", "db/seeds", "migrations", "db/migrations"}
+	for _, dir := range dirs {
+		if sql := firstSQLInDir(fs, dir); sql != "" {
+			r.Seed = &Seed{After: "db", SQL: "./" + dir + "/" + sql}
+			return
+		}
+	}
+}
+
+func hasService(r *DetectResult, name string) bool {
+	for _, s := range r.Services {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// firstSQLInDir returns the first entry in dir ending in .sql, sorted
+// alphabetically. Empty string if the dir is absent or contains no SQL.
+// We don't gate on fs.Exists(dir) because some FS backends treat dirs as
+// implicit (only files are tracked) — ListDir returning zero entries is
+// the same outcome as an absent directory.
+func firstSQLInDir(fs FS, dir string) string {
+	entries, err := fs.ListDir(dir)
+	if err != nil {
+		return ""
+	}
+	var sqls []string
+	for _, e := range entries {
+		if strings.HasSuffix(strings.ToLower(e), ".sql") {
+			sqls = append(sqls, e)
+		}
+	}
+	if len(sqls) == 0 {
+		return ""
+	}
+	sort.Strings(sqls)
+	return sqls[0]
+}
 
 // applyEnvExample, if a .env.example (or siblings) exists, parses it and merges
 // the resulting entries into the main exposed service, overwriting keys that

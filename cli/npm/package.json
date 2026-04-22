@@ -1,6 +1,6 @@
 {
   "name": "@hatchpr/cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CLI for Hatch — self-hosted PR preview deployments (scaffold .hatch.yml auto-detecté)",
   "bin": {
     "hatch": "bin/hatch"
