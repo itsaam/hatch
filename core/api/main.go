@@ -50,6 +50,17 @@ func main() {
 	dsn := mustEnv("DATABASE_URL")
 	allowedOrigin := mustEnv("ALLOWED_ORIGIN")
 	githubSecret := []byte(mustEnv("GITHUB_WEBHOOK_SECRET"))
+	// HATCH_ALLOWED_OWNERS is a comma-separated allowlist of GitHub owners
+	// whose repos are authorised to trigger builds. The `hatchpr` App is
+	// public on GitHub's marketplace; without this allowlist any stranger
+	// could install it on their repo and run arbitrary Dockerfiles on our
+	// host. An empty value denies every webhook and is almost certainly a
+	// misconfiguration — we fail fast on startup instead of silently
+	// accepting nothing.
+	allowedOwners := parseAllowedOwners(mustEnv("HATCH_ALLOWED_OWNERS"))
+	if len(allowedOwners) == 0 {
+		log.Fatalf("HATCH_ALLOWED_OWNERS must list at least one owner (csv)")
+	}
 	hatchNetwork := getenv("HATCH_NETWORK", "hatch_public")
 	hatchDomain := getenv("HATCH_DOMAIN", "localhost")
 	port := getenv("PORT", "8080")
@@ -135,7 +146,7 @@ func main() {
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
-	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient))
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners))
 
 	// Secret store — gated by HATCH_ADMIN_TOKEN (bearer). See secrets_handlers.go.
 	r.Route("/api/secrets", func(r chi.Router) {

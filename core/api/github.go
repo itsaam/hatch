@@ -113,7 +113,7 @@ func (n *prNotifier) OnHibernated(ctx context.Context, ref PreviewRef, days int)
 	_ = ctx
 }
 
-func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient) http.HandlerFunc {
+func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 		if err != nil {
@@ -141,6 +141,36 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
+
+		// --- Authorization gates -------------------------------------
+		// 1) Owner allowlist: HMAC authenticates the channel (GitHub
+		//    really sent this), not the intent. The `hatchpr` App is
+		//    public on GitHub's marketplace, so any stranger can install
+		//    it on their repo and trigger our build farm. We refuse to
+		//    build for owners not explicitly allowed.
+		// 2) Fork PRs: the PR head SHA lives on the fork, under control
+		//    of whoever opened it. GitHub Actions flags this as the
+		//    `pull_request_target` class of risk. For now we never build
+		//    fork PRs — contributors must either be repo collaborators
+		//    or push directly to a branch of the base repo.
+		// Both paths return 202 Accepted with a silent log: we avoid
+		//    leaking which owners are allowed via response shape.
+		owner, _, splitOK := splitRepo(ev.Repository.FullName)
+		if !splitOK || !allowedOwners[strings.ToLower(owner)] {
+			log.Printf("webhook: owner %q not in allowlist, skipping %s#%d",
+				owner, ev.Repository.FullName, ev.Number)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"ok":true,"skipped":"unauthorized owner"}`))
+			return
+		}
+		if isForkPR(ev) {
+			log.Printf("webhook: fork PR %s → %s#%d, skipping",
+				ev.PullRequest.Head.Repo.FullName, ev.Repository.FullName, ev.Number)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"ok":true,"skipped":"fork PR"}`))
+			return
+		}
+		// -------------------------------------------------------------
 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
@@ -262,6 +292,32 @@ func loadCommentID(ctx context.Context, pool *pgxpool.Pool, repo string, pr int)
 		return 0
 	}
 	return *id
+}
+
+// isForkPR reports whether the PR's head (code to be built) lives in a
+// different repository than the base. A fork PR means the attacker controls
+// the build context; we refuse to deploy those automatically.
+// A missing head repo (deleted fork) is treated as a fork for safety.
+func isForkPR(ev prEvent) bool {
+	head := strings.ToLower(strings.TrimSpace(ev.PullRequest.Head.Repo.FullName))
+	base := strings.ToLower(strings.TrimSpace(ev.Repository.FullName))
+	if head == "" {
+		return true
+	}
+	return head != base
+}
+
+// parseAllowedOwners turns a CSV env var ("alice,Bob,charlie") into a
+// lowercase set. Empty string / whitespace entries are ignored.
+func parseAllowedOwners(csv string) map[string]bool {
+	out := map[string]bool{}
+	for _, raw := range strings.Split(csv, ",") {
+		o := strings.ToLower(strings.TrimSpace(raw))
+		if o != "" {
+			out[o] = true
+		}
+	}
+	return out
 }
 
 func verifySignature(secret []byte, header string, body []byte) bool {
