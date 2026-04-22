@@ -131,6 +131,14 @@ func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *Comp
 			continue
 		}
 		tag := buildTag(slug, ref.PR, name, ref.SHA)
+		// Docker 29+ with the containerd snapshotter requires a BuildKit
+		// gRPC session to resolve remote image metadata during `docker
+		// build`. We don't implement the session protocol over raw HTTP,
+		// so we pre-pull every FROM image via the classic /images/create
+		// endpoint, which does not need a session. Once the base image
+		// lives in the local content store, BuildKit resolves it from
+		// cache and the build succeeds.
+		d.ensureBaseImagesForService(ctx, ref.Repo, ref.SHA, svc.Build, svc.Dockerfile, ref.InstallationID)
 		if err := d.build(ctx, ref.Repo, ref.PR, ref.SHA, name, tag, svc.Dockerfile, ref.InstallationID); err != nil {
 			return fmt.Errorf("build %s: %w", name, err)
 		}
