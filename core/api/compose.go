@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -35,6 +36,7 @@ type ComposeService struct {
 	Env         map[string]string   `yaml:"env,omitempty"`
 	DependsOn   []string            `yaml:"depends_on,omitempty"`
 	Healthcheck *ComposeHealthcheck `yaml:"healthcheck,omitempty"`
+	Limits      *ComposeLimits      `yaml:"limits,omitempty"`
 }
 
 // ComposeHealthcheck mirrors docker's HEALTHCHECK but with Hatch-friendly
@@ -43,6 +45,47 @@ type ComposeHealthcheck struct {
 	Cmd             string `yaml:"cmd"`
 	IntervalSeconds int    `yaml:"interval_seconds,omitempty"`
 	Retries         int    `yaml:"retries,omitempty"`
+}
+
+// ComposeLimits caps the resources a single container may consume. Memory
+// accepts suffixes k/m/g (powers of 1024). CPU is fractional cores, e.g.
+// 0.5 = half a core, 2 = two cores.
+type ComposeLimits struct {
+	Memory string  `yaml:"memory,omitempty"`
+	CPU    float64 `yaml:"cpu,omitempty"`
+}
+
+// parseMemoryBytes turns "512m"/"1g"/"1024" into bytes. Returns an error
+// for unknown suffix or non-positive value.
+func parseMemoryBytes(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0, errors.New("empty")
+	}
+	mult := int64(1)
+	switch last := s[len(s)-1]; last {
+	case 'g':
+		mult = 1 << 30
+		s = s[:len(s)-1]
+	case 'm':
+		mult = 1 << 20
+		s = s[:len(s)-1]
+	case 'k':
+		mult = 1 << 10
+		s = s[:len(s)-1]
+	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		// plain bytes
+	default:
+		return 0, fmt.Errorf("unknown memory suffix in %q (want k/m/g)", s)
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid memory value: %w", err)
+	}
+	if n <= 0 {
+		return 0, errors.New("memory must be positive")
+	}
+	return n * mult, nil
 }
 
 // ComposeSeed declares an optional SQL seed to run after a given service is
@@ -107,6 +150,19 @@ func validateCompose(spec *ComposeSpec) error {
 		for _, dep := range svc.DependsOn {
 			if _, ok := spec.Services[dep]; !ok {
 				return fmt.Errorf("hatch.yml: service %q depends on unknown service %q", name, dep)
+			}
+		}
+		if svc.Limits != nil {
+			if mem := strings.TrimSpace(svc.Limits.Memory); mem != "" {
+				if _, err := parseMemoryBytes(mem); err != nil {
+					return fmt.Errorf("hatch.yml: service %q has invalid limits.memory %q: %v", name, mem, err)
+				}
+			}
+			if svc.Limits.CPU < 0 {
+				return fmt.Errorf("hatch.yml: service %q has negative limits.cpu", name)
+			}
+			if svc.Limits.CPU > 16 {
+				return fmt.Errorf("hatch.yml: service %q limits.cpu > 16 (unrealistic)", name)
 			}
 		}
 	}

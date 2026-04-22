@@ -49,6 +49,36 @@ type composeCreateBody struct {
 
 type composeHostConfig struct {
 	RestartPolicy restartPolicy `json:"RestartPolicy"`
+	Memory        int64         `json:"Memory,omitempty"`   // bytes; 0 = unlimited
+	NanoCPUs      int64         `json:"NanoCpus,omitempty"` // cpu × 1e9
+}
+
+// Default resource caps applied when `limits:` is absent in .hatch.yml. A
+// preview that goes haywire (memory leak, runaway loop) can't starve the
+// host or its neighbours out of the box.
+const (
+	defaultMemoryBytes int64 = 1 << 30       // 1 GiB
+	defaultNanoCPUs    int64 = 1_000_000_000 // 1 CPU
+)
+
+// resolveLimits maps a service's `limits:` block to Docker HostConfig
+// values, falling back to defaults when individual fields are absent.
+// Memory is assumed valid here — validation happens in ParseCompose.
+func resolveLimits(limits *ComposeLimits) (memBytes, nanoCPUs int64) {
+	memBytes = defaultMemoryBytes
+	nanoCPUs = defaultNanoCPUs
+	if limits == nil {
+		return
+	}
+	if m := strings.TrimSpace(limits.Memory); m != "" {
+		if v, err := parseMemoryBytes(m); err == nil {
+			memBytes = v
+		}
+	}
+	if limits.CPU > 0 {
+		nanoCPUs = int64(limits.CPU * 1_000_000_000)
+	}
+	return
 }
 
 type composeNetworking struct {
@@ -227,12 +257,15 @@ func (d *Deployer) runComposeService(ctx context.Context, ref PreviewRef, spec *
 		env = append(env, k+"="+svc.Env[k])
 	}
 
+	memBytes, nanoCPUs := resolveLimits(svc.Limits)
 	body := composeCreateBody{
 		Image:  image,
 		Env:    env,
 		Labels: labels,
 		HostConfig: composeHostConfig{
 			RestartPolicy: restartPolicy{Name: "unless-stopped"},
+			Memory:        memBytes,
+			NanoCPUs:      nanoCPUs,
 		},
 		Networking: composeNetworking{
 			EndpointsConfig: endpoints,
