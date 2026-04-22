@@ -152,6 +152,48 @@ gem "sidekiq"
 			files:   map[string]string{},
 			wantErr: true,
 		},
+		{
+			name: "Node server with pg only (no framework)",
+			files: map[string]string{
+				"package.json": `{
+          "dependencies": {"pg": "^8.11.0"},
+          "scripts": {"start": "node server.js"}
+        }`,
+				"Dockerfile": "FROM node:20\n",
+			},
+			wantStackContains: "Node",
+			wantServices:      []string{"api", "db"},
+		},
+		{
+			name: "Express + redis",
+			files: map[string]string{
+				"package.json": `{
+          "dependencies": {"express": "^4", "ioredis": "^5"}
+        }`,
+				"Dockerfile": "FROM node:20\n",
+			},
+			wantStackContains: "Express",
+			wantServices:      []string{"api", "redis"},
+		},
+		{
+			name: "NestJS + prisma",
+			files: map[string]string{
+				"package.json": `{
+          "dependencies": {"@nestjs/core": "^10", "@prisma/client": "^5"}
+        }`,
+				"Dockerfile": "FROM node:20\n",
+			},
+			wantStackContains: "NestJS",
+			wantServices:      []string{"api", "db"},
+		},
+		{
+			name: "package.json without server indicators → static",
+			files: map[string]string{
+				"package.json": `{"dependencies": {"lodash": "^4"}}`,
+			},
+			wantStackContains: "Static",
+			wantServices:      []string{"web"},
+		},
 	}
 
 	for _, tc := range tests {

@@ -390,14 +390,14 @@ func detectFromPackageJSON(fs FS) (*DetectResult, error) {
 
 	warnings := []string{}
 	if !fs.Exists("Dockerfile") {
-		warnings = append(warnings, "No Dockerfile found. Hatch will need one to build the `web` service — add a minimal Dockerfile at the repo root.")
+		warnings = append(warnings, "No Dockerfile found. Hatch will need one to build the app service — add a minimal Dockerfile at the repo root.")
 	}
 
 	var result *DetectResult
 	switch {
 	case hasDep("next"):
 		result = nextStack(hasDep, warnings)
-	case hasDep("express") || hasDep("fastify"):
+	case isNodeServer(hasDep, &pkg):
 		result = nodeAPIStack(hasDep, warnings)
 	default:
 		result = staticStack(warnings)
@@ -492,8 +492,57 @@ func nextStack(has func(string) bool, warnings []string) *DetectResult {
 	return &DetectResult{StackName: name, Services: services, Warnings: warnings}
 }
 
+// isNodeServer returns true when the package.json describes a Node runtime
+// process (not a static site). We treat any backend framework, any server-
+// side database/cache client, or the presence of a `start` script as
+// sufficient evidence.
+func isNodeServer(has func(string) bool, pkg *packageJSON) bool {
+	frameworks := []string{"express", "fastify", "koa", "hapi", "@nestjs/core", "hono"}
+	for _, fw := range frameworks {
+		if has(fw) {
+			return true
+		}
+	}
+	backendDeps := []string{
+		"pg", "mysql2", "mongodb", "mongoose",
+		"prisma", "@prisma/client", "drizzle-orm",
+		"ioredis", "redis",
+	}
+	for _, d := range backendDeps {
+		if has(d) {
+			return true
+		}
+	}
+	if pkg != nil {
+		if _, ok := pkg.Scripts["start"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// nodeFrameworkLabel returns a human-facing name for the detected framework.
+func nodeFrameworkLabel(has func(string) bool) string {
+	switch {
+	case has("@nestjs/core"):
+		return "NestJS"
+	case has("express"):
+		return "Express"
+	case has("fastify"):
+		return "Fastify"
+	case has("koa"):
+		return "Koa"
+	case has("hapi"):
+		return "Hapi"
+	case has("hono"):
+		return "Hono"
+	default:
+		return "Node"
+	}
+}
+
 func nodeAPIStack(has func(string) bool, warnings []string) *DetectResult {
-	withDB := has("pg") || has("mongoose") || has("prisma") || has("@prisma/client")
+	withDB := has("pg") || has("mongoose") || has("prisma") || has("@prisma/client") || has("drizzle-orm") || has("mysql2") || has("mongodb")
 	withRedis := hasRedisDep(has)
 	api := Service{
 		Name:   "api",
@@ -503,7 +552,7 @@ func nodeAPIStack(has func(string) bool, warnings []string) *DetectResult {
 		Env:    map[string]string{"NODE_ENV": "production"},
 	}
 	services := []Service{api}
-	name := "Node API"
+	name := nodeFrameworkLabel(has)
 	deps := []string{}
 	if withDB {
 		name += " + Postgres"
