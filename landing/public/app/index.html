@@ -505,6 +505,50 @@ async function loadPreviews() {
   render();
 }
 
+// softRefreshPreviews fetches the list without wiping state.previews first,
+// so the UI doesn't flash a "loading..." placeholder on each tick. Used by
+// the background poller (see startPreviewsPolling).
+async function softRefreshPreviews() {
+  if (!state.token || state.view !== 'previews') return;
+  try {
+    const data = await api('/api/previews');
+    const next = Array.isArray(data) ? data : (data.previews || []);
+    // Cheap change detection: re-render only when status/url actually moved.
+    const prev = state.previews || [];
+    const sig = (arr) => arr.map(p => `${p.repo_full_name}#${p.pr_number}:${p.status}:${p.url || ''}`).join('|');
+    if (sig(next) !== sig(prev)) {
+      state.previews = next;
+      render();
+    }
+  } catch (e) {
+    // Silent — manual refresh will surface any persistent error.
+  }
+}
+
+// Start a background poller that keeps the previews list fresh while the
+// user watches a build go from building → running. Cadence adapts: short
+// interval when anything is transitioning, long when idle. Paused when the
+// tab is hidden (saves bandwidth and avoids server chatter for nothing).
+function startPreviewsPolling() {
+  if (state._previewsPoller) return;
+  const tick = () => {
+    if (document.hidden) return;
+    softRefreshPreviews();
+  };
+  const pickInterval = () => {
+    const ps = state.previews || [];
+    const hasTransitional = ps.some(p => p.status === 'building' || p.status === 'pending');
+    return hasTransitional ? 2500 : 15000;
+  };
+  const schedule = () => {
+    state._previewsPoller = setTimeout(async () => {
+      await tick();
+      schedule();
+    }, pickInterval());
+  };
+  schedule();
+}
+
 async function loadSecrets() {
   state.secrets = null;
   state.secretsErr = null;
@@ -782,6 +826,7 @@ function viewLogin() {
       }
       render();
       loadPreviews();
+      startPreviewsPolling();
     } catch (e) {
       errMsg = 'Erreur réseau.';
       render();
@@ -1219,7 +1264,10 @@ document.addEventListener('keydown', (e) => {
 
 // boot
 render();
-if (state.token) loadPreviews();
+if (state.token) {
+  loadPreviews();
+  startPreviewsPolling();
+}
 </script>
 </body>
 </html>
