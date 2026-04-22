@@ -174,6 +174,7 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 
 	log.Printf("deploy ok: %s#%d → %s", ref.Repo, ref.PR, publicURL)
 	d.setStatus(ctx, ref, "running", publicURL)
+	go d.healthCheckAfterDeploy(ref, publicURL)
 
 	if err := d.pruneOldImagesForStack(ctx, slug, ref.PR, ref.SHA, spec); err != nil {
 		log.Printf("prune images %s#%d: %v", ref.Repo, ref.PR, err)
@@ -521,6 +522,69 @@ func (d *Deployer) remove(ctx context.Context, name string) error {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("remove http %d: %s", resp.StatusCode, truncate(string(b), 200))
+}
+
+// healthCheckAfterDeploy probes the public URL for up to 60s after a
+// preview is marked "running". If nothing responds, the preview is
+// transitioned to "failed" — the dashboard then surfaces the crashloop
+// instead of showing a misleading "running" state. A non-5xx response
+// counts as healthy (401/404/301 still prove the app bound its port).
+func (d *Deployer) healthCheckAfterDeploy(ref PreviewRef, publicURL string) {
+	if publicURL == "" {
+		return
+	}
+	time.Sleep(3 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
+	defer cancel()
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.probeURL(ctx, publicURL) {
+			log.Printf("healthcheck %s#%d: %s responded OK", ref.Repo, ref.PR, publicURL)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	// Guarded UPDATE: transition only from running → failed. Avoids
+	// clobbering a concurrent Destroy() or a fresh redeploy that already
+	// moved the row back to "building".
+	markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer markCancel()
+	tag, err := d.pool.Exec(markCtx,
+		`UPDATE previews SET status='failed', updated_at=NOW()
+		 WHERE repo_full_name=$1 AND pr_number=$2 AND status='running'`,
+		ref.Repo, ref.PR)
+	if err != nil {
+		log.Printf("healthcheck mark failed %s#%d: %v", ref.Repo, ref.PR, err)
+		return
+	}
+	if tag.RowsAffected() > 0 {
+		log.Printf("healthcheck %s#%d: no HTTP response within 60s, marked failed", ref.Repo, ref.PR)
+		if d.notifier != nil {
+			d.notifier.OnStatusChange(markCtx, ref, "failed", publicURL)
+		}
+	}
+}
+
+func (d *Deployer) probeURL(ctx context.Context, url string) bool {
+	reqCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := d.httpExt.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
 }
 
 func (d *Deployer) setStatus(ctx context.Context, ref PreviewRef, status, publicURL string) {
