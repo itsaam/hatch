@@ -60,6 +60,14 @@ type Deployer struct {
 	// on container names or the per-PR network.
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex
+
+	// deploySem is a counting semaphore that caps the number of Deploy()
+	// calls executing concurrently across the whole process. It defends
+	// the host against sudden PR bursts (say a repo that opens 20 PRs in
+	// rapid succession): without this, the Docker daemon would try to
+	// build 20 stacks at once and thrash the box. A nil channel means
+	// "no limit" (only used in tests).
+	deploySem chan struct{}
 }
 
 // SetAppClient wires the GitHub App client used to fetch `.hatch.yml` and
@@ -67,12 +75,16 @@ type Deployer struct {
 // falls back to unauthenticated GitHub raw fetches (public repos only).
 func (d *Deployer) SetAppClient(app *AppClient) { d.app = app }
 
-func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) {
+func NewDeployer(pool *pgxpool.Pool, netName, domain string, maxConcurrent int) (*Deployer, error) {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "unix", "/var/run/docker.sock")
 		},
+	}
+	var sem chan struct{}
+	if maxConcurrent > 0 {
+		sem = make(chan struct{}, maxConcurrent)
 	}
 	return &Deployer{
 		// Timeout=0 : request lifetime is bound by the caller's context,
@@ -86,6 +98,7 @@ func NewDeployer(pool *pgxpool.Pool, netName, domain string) (*Deployer, error) 
 		domain:     domain,
 		notifier:   noopNotifier{},
 		dockerBase: "http://docker",
+		deploySem:  sem,
 	}, nil
 }
 
@@ -117,6 +130,16 @@ func (d *Deployer) lockFor(repo string, pr int) *sync.Mutex {
 }
 
 func (d *Deployer) Deploy(ref PreviewRef) {
+	// Bound the number of deploys running concurrently across the whole
+	// process. We block here *before* taking the per-PR lock: holding the
+	// lock while waiting in the queue would serialise further PR events
+	// for free, but it also blocks Destroy for the same PR — we'd rather
+	// take the semaphore, then the lock, in that order.
+	if d.deploySem != nil {
+		d.deploySem <- struct{}{}
+		defer func() { <-d.deploySem }()
+	}
+
 	lock := d.lockFor(ref.Repo, ref.PR)
 	lock.Lock()
 	defer lock.Unlock()

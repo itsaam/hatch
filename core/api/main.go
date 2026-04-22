@@ -66,6 +66,10 @@ func main() {
 	port := getenv("PORT", "8080")
 	ttlHours := getenvInt("PREVIEW_TTL_HOURS", 168)
 	reaperMinutes := getenvInt("PREVIEW_REAPER_INTERVAL_MINUTES", 60)
+	// Cap parallel deploys to keep sunny from thrashing when a burst of
+	// PR events lands (reopens, synchronises, or a collaborator opening
+	// many PRs at once). Excess calls queue on Deployer.deploySem.
+	maxConcurrent := getenvInt("HATCH_MAX_CONCURRENT_DEPLOYS", 3)
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -86,7 +90,7 @@ func main() {
 		}
 	}
 
-	deployer, err := NewDeployer(pool, hatchNetwork, hatchDomain)
+	deployer, err := NewDeployer(pool, hatchNetwork, hatchDomain, maxConcurrent)
 	if err != nil {
 		log.Fatalf("deployer init: %v", err)
 	}
