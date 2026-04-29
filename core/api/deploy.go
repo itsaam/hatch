@@ -242,10 +242,55 @@ func (d *Deployer) build(ctx context.Context, repo string, pr int, sha, service,
 	q.Set("t", tag)
 	q.Set("q", "1")
 	q.Set("forcerm", "1")
-	q.Set("nocache", "1")   // avoid cross-PR cache layer conflicts — prioritise correctness over speed
-	q.Set("version", "2")   // BuildKit: required for Docker 29+ containerd snapshotter and --mount=type=cache syntax
+	q.Set("version", "2") // BuildKit: required for Docker 29+ containerd snapshotter and --mount=type=cache syntax
 	if dockerfile != "" {
 		q.Set("dockerfile", dockerfile)
+	}
+
+	// Optional gRPC session. When enabled, BuildKit can resolve secrets via
+	// --mount=type=secret and stream a richer trace. Layer cache invalidation
+	// is unchanged: BuildKit still derives layer keys from the build context
+	// content, so a lockfile or source change still busts the relevant
+	// layer. Cache mounts (RUN --mount=type=cache,target=...) live outside
+	// the layer cache and only persist package download state, never install
+	// results — they cannot serve a stale binary across builds.
+	//
+	// nocache=1 is intentionally NOT set:
+	//   - When the session is OFF the legacy behaviour is preserved by the
+	//     fact that base images are pre-pulled and BuildKit still hashes by
+	//     content. Cross-PR layer reuse is desirable for speed and the per-
+	//     PR tag (buildTag) keeps images isolated for cleanup.
+	//   - When the session is ON we want layer cache reuse so npm/pip/gem
+	//     reinstall steps actually skip on unchanged lockfiles.
+	var stopSession func()
+	if buildKitSessionEnabled() {
+		secrets := loadBuildSecretsForRepo()
+		sess, sessID, sessErr := newBuildSession(ctx, secrets)
+		if sessErr != nil {
+			log.Printf("buildkit session %s: %v (falling back to no-session build)", repo, sessErr)
+		} else {
+			stop, runErr := runBuildSession(ctx, sess, dockerSocketPath)
+			if runErr != nil {
+				log.Printf("buildkit session run %s: %v (falling back)", repo, runErr)
+				_ = sess.Close()
+			} else {
+				stopSession = stop
+				q.Set("session", sessID)
+				if len(secrets) > 0 {
+					log.Printf("buildkit session %s: id=%s with %d build secret(s)", repo, sessID, len(secrets))
+				} else {
+					log.Printf("buildkit session %s: id=%s (no build secrets)", repo, sessID)
+				}
+			}
+		}
+	} else {
+		// Legacy behaviour: no cross-build layer cache, no cache mounts —
+		// keeps the historic correctness story that predates the session
+		// work. Set nocache=1 to mirror the pre-flag default.
+		q.Set("nocache", "1")
+	}
+	if stopSession != nil {
+		defer stopSession()
 	}
 
 	// Insert a build_logs row upfront so the dashboard can show "running"
