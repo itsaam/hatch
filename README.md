@@ -1,28 +1,30 @@
 <div align="center">
 
-# 🥚 Hatch
+<img src="assets/logo.png" alt="Hatch" width="96" />
 
-**Self-hosted PR preview deployments avec isolation complète (app + DB) par pull request.**
+# Hatch
 
-[Site](https://hatchpr.dev) · [Docs](https://hatchpr.dev/docs/) · [GitHub App](https://github.com/apps/hatchpr) · [Demo repo](https://github.com/itsaam/hatch-demo-node)
+Self-hosted preview deployments par pull request — app, base de données et services isolés à chaque PR.
 
-![status](https://img.shields.io/badge/status-beta-orange) ![license](https://img.shields.io/badge/license-MIT-green) ![stack](https://img.shields.io/badge/backend-Go-00ADD8) ![runtime](https://img.shields.io/badge/runtime-Docker-2496ED)
+[hatchpr.dev](https://hatchpr.dev) · [Docs](https://hatchpr.dev/docs/) · [GitHub App](https://github.com/apps/hatchpr) · [Demo repo](https://github.com/itsaam/hatch-demo-node)
 
 </div>
 
 ---
 
-## Le problème
+## Pourquoi
 
-Vercel/Netlify font des previews pour les apps stateless. Dès que ton projet a une base de données, Redis, un worker, des secrets — tu galères :
+Vercel et Netlify font des previews très bien — tant que ton app tient dans une lambda. Dès qu'il y a une base de données, un Redis, un worker, des secrets partagés, le modèle craque :
 
-- DB staging partagée → pollution entre reviewers
-- Setup local → reviewer non-tech perdu
-- Vercel Pro + DB managées + Redis managé pour chaque PR → facture qui explose
+- une DB de staging partagée pollue les PRs entre elles ;
+- un setup local complet exclut tous les reviewers non-tech ;
+- une base managée par PR sur du Vercel Pro coûte un bras.
 
-## La solution
+Hatch fait tourner tout le stack — app, DB, Redis, workers — sur **ton serveur**, isolé par PR, jetable à la fermeture.
 
-Tu ajoutes un `.hatch.yml` à la racine de ton repo :
+## Comment ça marche
+
+Tu poses un `.hatch.yml` à la racine de ton repo :
 
 ```yaml
 version: 1
@@ -47,69 +49,57 @@ seed:
   sql: ./seed/preview.sql
 ```
 
-Tu pushes une branche, ouvres une PR. Hatch :
+Tu pushes une branche, ouvres une PR. Hatch build l'image, démarre le stack dans son propre réseau Docker, attend que les healthchecks passent, expose `pr-<num>-<repo>.hatchpr.dev` en HTTPS, et commente le lien sur la PR. À la fermeture, tout est détruit — containers, volumes, certificat, ligne en base.
 
-1. **Spawn** le stack complet (app + DB + services) sur TON serveur
-2. **Isole** chaque PR dans son propre réseau Docker — aucune fuite de données entre previews
-3. **Route** l'URL `pr-<num>-<repo>.hatchpr.dev` avec HTTPS Let's Encrypt automatique
-4. **Commente** le lien sur la PR
-5. **Nettoie** tout quand la PR ferme (containers, network, DB)
+Chaque preview a sa propre DB vierge, son propre mot de passe (dérivé HMAC), aucune fuite d'une PR à l'autre.
 
-## Features
+## Ce qui marche aujourd'hui
 
-- ✅ **Multi-services** : app + DB + Redis + workers… tout ce qui rentre dans un Dockerfile ou une image Docker
-- ✅ **Isolation par PR** : réseau Docker dédié, DB vierge, mot de passe dérivé HMAC unique
-- ✅ **Seed SQL** : pré-remplir la DB avec des données de test à chaque preview
-- ✅ **Healthchecks** : `depends_on` attend que le service cible soit healthy
-- ✅ **HTTPS auto** : Traefik + Let's Encrypt, zéro config
-- ✅ **Bot GitHub** : commente le lien preview, met à jour au sync, annonce la suppression
-- ✅ **Cleanup** : fermeture de PR + TTL 7 jours d'inactivité
-- ✅ **Self-hosted** : ton serveur, tes règles, pas de vendor lock
+Multi-services arbitraires (tout ce qui rentre dans une image Docker). Seed SQL automatique au boot. `depends_on` qui attend vraiment le healthcheck. HTTPS Let's Encrypt sans config. Bot GitHub qui poste, met à jour au sync, annonce la suppression. Cleanup automatique à la fermeture + TTL 7 jours d'inactivité. Dashboard web pour voir les previews actifs, redeployer, lire les logs en streaming, gérer les secrets chiffrés.
 
 ## Quick start
 
-1. Installe la GitHub App sur ton repo : [github.com/apps/hatchpr](https://github.com/apps/hatchpr)
-2. Ajoute un `.hatch.yml` à la racine (cf. [docs](https://hatchpr.dev/docs/))
-3. Ouvre une PR → preview live sous 30-60s
+1. Installer la GitHub App : [github.com/apps/hatchpr](https://github.com/apps/hatchpr)
+2. Ajouter `.hatch.yml` à la racine du repo (voir [docs](https://hatchpr.dev/docs/))
+3. Ouvrir une PR — preview live en 30 à 60 secondes
 
-Le [demo repo](https://github.com/itsaam/hatch-demo-node) montre un stack Node + Postgres complet.
+Le [demo repo](https://github.com/itsaam/hatch-demo-node) montre un stack Node + Postgres complet et fonctionnel.
 
 ## Architecture
 
 ```
-core/api/              Control plane Go (webhook, deployer, bot, reconciler)
-landing/               Site + docs (Vite + React)
-docker-compose.yml     Déploiement prod du control plane lui-même
+core/api/            Control plane Go — webhook, deployer, reconciler, bot GitHub
+landing/             Site marketing + docs + dashboard (Vite + React)
+templates/           Templates de démarrage (Next.js, FastAPI, Django, Rails, static)
+docker-compose.yml   Déploiement du control plane lui-même
 ```
 
-- **Backend** : Go 1.23, chi, pgx/v5
-- **DB** : PostgreSQL 16
-- **Runtime** : Docker Engine API (pas de SDK — appels HTTP directs via unix socket)
-- **Reverse proxy** : Traefik (ré-utilisé si déjà présent sur l'host, ex. Dokploy)
-- **GitHub** : App auth JWT RS256 + installation tokens
+Backend Go 1.23 (chi + pgx/v5), PostgreSQL 16, Docker Engine API en direct via socket Unix (pas de SDK), Traefik en reverse proxy (réutilisé si déjà présent sur l'host, ex. Dokploy), GitHub App auth via JWT RS256 + installation tokens.
 
-## Installation (self-host)
+## Installation self-host
 
-Serveur Linux avec Docker + Traefik (ou Dokploy) + DNS wildcard `*.yourdomain.com` → IP du host.
+Prérequis : un serveur Linux avec Docker, un Traefik (ou Dokploy) déjà sur la machine, un DNS wildcard `*.tondomaine.com` qui pointe sur l'IP de l'host.
 
 ```bash
 git clone https://github.com/itsaam/hatch /opt/hatch
 cd /opt/hatch
 cp .env.example .env
 # édite .env : POSTGRES_PASSWORD, GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET, HATCH_DOMAIN
-# place ta clé privée GitHub App dans /etc/hatch/secrets/github-app.pem (chmod 600)
+# place la clé privée GitHub App dans /etc/hatch/secrets/github-app.pem (chmod 600)
 docker compose up -d
 ```
 
-Détails complets : [docs d'installation](https://hatchpr.dev/docs/).
+Procédure complète et runbook : [hatchpr.dev/docs](https://hatchpr.dev/docs/).
 
-## Limitations actuelles
+## Limites actuelles
 
-Beta. Pas encore :
-- Dashboard web (status via bot GitHub + logs serveur pour l'instant)
-- Secret store UI (secrets hardcodés dans `.hatch.yml` pour les valeurs de test uniquement)
-- Volumes persistants (la DB d'une preview repart de zéro à chaque redeploy — souvent voulu)
-- Multi-region
+C'est une beta utilisable mais incomplète. Ne sont pas encore livrés :
+
+- volumes persistants (la DB d'une preview repart de zéro à chaque redeploy — c'est souvent voulu, mais pas configurable) ;
+- multi-region ;
+- rollback explicite vers un commit antérieur (un nouveau push réécrit la preview).
+
+Les bugs et idées vivent dans les [issues GitHub](https://github.com/itsaam/hatch/issues).
 
 ## Licence
 
@@ -122,5 +112,5 @@ Samy Abdelmalek — [samyabdelmalek.fr](https://samyabdelmalek.fr/)
 ---
 
 <div align="center">
-  Si Hatch te plaît, <a href="https://github.com/itsaam/hatch">⭐ star le repo</a> — ça m'aide énormément.
+Si Hatch te sert, <a href="https://github.com/itsaam/hatch">⭐ star le repo</a>. Ça aide vraiment.
 </div>
