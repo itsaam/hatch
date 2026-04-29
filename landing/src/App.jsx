@@ -4,6 +4,7 @@ import Preloader from './components/Preloader.jsx'
 import Hero from './sections/Hero.jsx'
 import Problem from './sections/Problem.jsx'
 import Solution from './sections/Solution.jsx'
+import Templates from './sections/Templates.jsx'
 import Flow from './sections/Flow.jsx'
 import Why from './sections/Why.jsx'
 import Status from './sections/Status.jsx'
@@ -19,6 +20,7 @@ export default function App() {
         <Hero ready={ready} />
         <Problem />
         <Solution />
+        <Templates />
         <Flow />
         <Why />
         <Status />

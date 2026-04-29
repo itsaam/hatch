@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Static · Hatch preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0F0D0A;
+      color: #F5EFE6;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 96px 24px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      background: rgba(255, 122, 61, 0.12);
+      border: 1px solid rgba(255, 122, 61, 0.4);
+      color: #FF7A3D;
+      border-radius: 999px;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      margin-bottom: 28px;
+    }
+    h1 {
+      font-size: clamp(36px, 6vw, 72px);
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+      margin: 0 0 28px;
+    }
+    h1 em {
+      color: #FF7A3D;
+      font-style: italic;
+    }
+    p {
+      color: #C9C2B5;
+      line-height: 1.6;
+      font-size: 17px;
+      margin: 0 0 24px;
+      max-width: 560px;
+    }
+    a.link {
+      color: #FF7A3D;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(255, 122, 61, 0.4);
+      padding-bottom: 1px;
+      transition: border-color 200ms;
+    }
+    a.link:hover { border-bottom-color: #FF7A3D; }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="badge">hatch · static preview</span>
+    <h1>A static site, <em>shipped via PR.</em></h1>
+    <p>
+      This preview is a plain HTML page served by nginx alpine. Hatch built the
+      image, spun up a container, and routed a wildcard subdomain to it the
+      moment you pushed.
+    </p>
+    <p>
+      <a class="link" href="https://github.com/hatchpr">Learn more about Hatch →</a>
+    </p>
+  </main>
+</body>
+</html>

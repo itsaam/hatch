@@ -1,0 +1,12 @@
+.git
+.gitignore
+log
+tmp
+.env
+.env.*
+README.md
+.dockerignore
+.hatch.yml
+.byebug_history
+.bundle
+vendor/bundle

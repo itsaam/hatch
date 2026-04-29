@@ -4,7 +4,7 @@ import EmailCapture from '../components/EmailCapture.jsx'
 
 export default function Cta() {
   return (
-    <Section id="cta" label="[06] EARLY ACCESS" style={{ position: 'relative', overflow: 'hidden' }}>
+    <Section id="cta" label="[07] EARLY ACCESS" style={{ position: 'relative', overflow: 'hidden' }}>
       <div style={{
         position: 'absolute', bottom: '-30%', left: '50%', transform: 'translateX(-50%)',
         width: 700, height: 700,

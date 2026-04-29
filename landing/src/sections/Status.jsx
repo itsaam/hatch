@@ -19,7 +19,7 @@ const tlabel = { done: 'FAIT', wip: 'EN COURS', todo: 'À VENIR' }
 
 export default function Status() {
   return (
-    <Section id="status" label="[05] EN COURS">
+    <Section id="status" label="[06] EN COURS">
       <h2 className="display" style={{
         fontSize: 'clamp(32px, 5vw, 56px)', maxWidth: 800, marginBottom: 60, fontWeight: 700
       }}>

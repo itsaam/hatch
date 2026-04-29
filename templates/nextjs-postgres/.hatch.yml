@@ -1,0 +1,27 @@
+version: 1
+services:
+  web:
+    build: .
+    port: 3000
+    expose: true
+    env:
+      DATABASE_URL: postgres://app:${DB_PASSWORD}@db:5432/app
+      PORT: "3000"
+    depends_on: [db]
+    limits:
+      memory: 512m
+      cpu: 0.5
+    healthcheck:
+      cmd: wget -qO- http://localhost:3000/api/health
+      interval_seconds: 5
+      retries: 12
+  db:
+    image: postgres:16-alpine
+    env:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: app
+    healthcheck:
+      cmd: pg_isready -U app
+      interval_seconds: 3
+      retries: 20

@@ -33,7 +33,7 @@ export default function Flow() {
   }, [])
 
   return (
-    <Section id="flow" label="[03] LE FLUX">
+    <Section id="flow" label="[04] LE FLUX">
       <h2 className="display" style={{
         fontSize: 'clamp(32px, 5vw, 56px)', maxWidth: 800, marginBottom: 60, fontWeight: 700
       }}>

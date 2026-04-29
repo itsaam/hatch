@@ -9,7 +9,7 @@ const cards = [
 
 export default function Why() {
   return (
-    <Section id="why" label="[04] POURQUOI">
+    <Section id="why" label="[05] POURQUOI">
       <h2 className="display" style={{
         fontSize: 'clamp(32px, 5vw, 56px)', maxWidth: 900, marginBottom: 60, fontWeight: 700
       }}>
