@@ -177,13 +177,18 @@ footer.foot a { color: var(--text-mute); }
         <li><a href="#intro">Introduction</a></li>
         <li><a href="#pourquoi">Pourquoi <code>.hatch.yml</code></a></li>
         <li><a href="#quickstart">Quickstart</a></li>
+        <li><a href="#cli">CLI <code>@hatchpr/cli</code></a></li>
+        <li><a href="#templates">Templates</a></li>
       </ul>
     </div>
     <div class="group">
       <div class="group-title">Référence</div>
       <ul>
         <li><a href="#config">Format <code>.hatch.yml</code></a></li>
+        <li><a href="#limits">Resource limits</a></li>
         <li><a href="#variables">Variables</a></li>
+        <li><a href="#secrets">Secret store</a></li>
+        <li><a href="#buildkit">BuildKit</a></li>
         <li><a href="#healthcheck">Healthcheck</a></li>
         <li><a href="#seed">Seed SQL</a></li>
         <li><a href="#isolation">Isolation & cleanup</a></li>
@@ -201,7 +206,9 @@ footer.foot a { color: var(--text-mute); }
     <div class="group">
       <div class="group-title">Opérations</div>
       <ul>
+        <li><a href="#dashboard">Dashboard & logs</a></li>
         <li><a href="#ttl">Durée de vie & TTL</a></li>
+        <li><a href="#securite">Sécurité</a></li>
         <li><a href="#troubleshooting">Troubleshooting</a></li>
         <li><a href="#limites">Limites actuelles</a></li>
       </ul>
@@ -251,6 +258,29 @@ footer.foot a { color: var(--text-mute); }
 
     <hr>
 
+    <h2 id="cli">CLI <code>@hatchpr/cli</code></h2>
+    <p>Un binaire pour scaffolder ton <code>.hatch.yml</code> à partir de la stack détectée dans le repo (Node, Python, Rails, static, plus DB / Redis si présents).</p>
+
+<pre><code><span class="c"># Install global</span>
+<span class="k">npm</span> <span class="s">i -g @hatchpr/cli</span>
+<span class="k">hatch</span> <span class="s">--help</span>
+
+<span class="c"># Ou one-shot, sans installer</span>
+<span class="k">npx</span> <span class="s">@hatchpr/cli init</span></code></pre>
+
+    <p>La seule commande aujourd'hui est <code>hatch init</code> — elle scanne le projet, propose un YAML, et l'écrit à la racine. Flags utiles :</p>
+    <ul>
+      <li><code>--dry-run</code> imprime le YAML sans écrire le fichier</li>
+      <li><code>--force</code> écrase un <code>.hatch.yml</code> existant</li>
+      <li><code>--output &lt;path&gt;</code> chemin de sortie (défaut <code>.hatch.yml</code>)</li>
+      <li><code>--verbose</code> détaille la détection</li>
+    </ul>
+
+    <h2 id="templates">Templates</h2>
+    <p>Pour démarrer plus vite, fork un des <a href="https://hatchpr.dev/#templates">templates prêts à l'emploi</a> — Next.js, FastAPI, Django, Rails, static. Chacun embarque un <code>.hatch.yml</code> et un <code>Dockerfile</code> qui marchent en l'état.</p>
+
+    <hr>
+
     <h2 id="config">Format <code>.hatch.yml</code></h2>
     <p>Spec complète. Toutes les clés hors <code>version</code> et un <code>services.*</code> minimum sont optionnelles.</p>
 
@@ -276,9 +306,25 @@ footer.foot a { color: var(--text-mute); }
       <span class="k">interval_seconds:</span> <span class="n">3</span>
       <span class="k">retries:</span> <span class="n">20</span>
 
+    <span class="k">limits:</span>
+      <span class="k">memory:</span> <span class="s">512m</span>             <span class="c"># k/m/g, puissances de 1024</span>
+      <span class="k">cpu:</span> <span class="n">0.5</span>                 <span class="c"># cœurs fractionnaires</span>
+
 <span class="k">seed:</span>
   <span class="k">after:</span> <span class="s">db</span>                     <span class="c"># service qui doit être healthy avant exécution</span>
   <span class="k">sql:</span> <span class="s">./seed/preview.sql</span>        <span class="c"># script SQL appliqué une fois</span></code></pre>
+
+    <h3 id="limits">Resource limits</h3>
+    <p>Chaque service peut plafonner sa mémoire et son CPU. Les valeurs sont validées au parse : <code>memory</code> accepte les suffixes <code>k</code>, <code>m</code>, <code>g</code> (puissances de 1024), <code>cpu</code> est un nombre fractionnaire jusqu'à <strong>16</strong>.</p>
+
+<pre><code><span class="k">services:</span>
+  <span class="k">web:</span>
+    <span class="k">build:</span> <span class="s">.</span>
+    <span class="k">limits:</span>
+      <span class="k">memory:</span> <span class="s">512m</span>
+      <span class="k">cpu:</span> <span class="n">0.5</span></code></pre>
+
+    <p>Sans <code>limits</code> déclarés, les défauts appliqués sont <strong>1 GiB de mémoire</strong> et <strong>1 CPU</strong> par service. Mets des limites plus serrées sur tes workers / DB pour que les previews tiennent à plusieurs sur un même host.</p>
 
     <h3>Règles importantes</h3>
     <ul>
@@ -308,7 +354,52 @@ footer.foot a { color: var(--text-mute); }
     </table>
 
     <div class="callout">
-      <strong>Secrets persistants</strong> — pour des clés API (Stripe test, SendGrid dev, etc.), un secret store est prévu (pas encore exposé). Pour l'instant, tu peux hardcoder des valeurs de <em>test</em> directement dans <code>.hatch.yml</code>. Ne mets jamais de secrets de production.
+      <strong>Secrets persistants</strong> — pour des clés API (Stripe test, SendGrid dev, etc.), utilise le <a href="#secrets">secret store</a> exposé sur le dashboard <code>/app</code>. Les valeurs sont chiffrées AES-256 côté serveur, scopées par repo, et injectées comme variables d'environnement runtime dans les services de chaque preview. Référence-les dans <code>.hatch.yml</code> via <code>${SECRET_NOM}</code>.
+    </div>
+
+    <hr>
+
+    <h2 id="secrets">Secret store</h2>
+    <p>Géré depuis le dashboard <a href="https://hatchpr.dev/app"><code>/app</code></a>. Liste, ajoute et supprime des secrets <strong>par repo</strong>. Stockés chiffrés AES-256 côté serveur, jamais en clair en base. Au runtime, chaque secret est exposé comme variable d'environnement aux services de la preview.</p>
+
+    <p>Référence un secret dans ton <code>.hatch.yml</code> avec le préfixe <code>SECRET_</code> :</p>
+
+<pre><code><span class="k">services:</span>
+  <span class="k">web:</span>
+    <span class="k">env:</span>
+      <span class="k">STRIPE_KEY:</span> <span class="s">${SECRET_STRIPE_TEST_KEY}</span>
+      <span class="k">SENDGRID_KEY:</span> <span class="s">${SECRET_SENDGRID_DEV}</span></code></pre>
+
+    <h3>Backup chiffré</h3>
+    <p>Le dashboard expose un export <code>.tar.gz.enc</code> chiffré côté serveur, et un import qui relit ce ciphertext. Les secrets ne sont jamais déchiffrés côté client : le fichier circule en chiffré, et le serveur de destination peut le restaurer s'il partage la même clé maître.</p>
+
+    <div class="callout warn">
+      <strong>Distinct des build secrets</strong> — un secret du store est injecté <em>au runtime</em> dans le container. Pour des secrets de <em>build</em> (token npm privé, etc.), passe par <a href="#buildkit">BuildKit</a> et <code>RUN --mount=type=secret</code> ; ces secrets-là ne touchent jamais le runtime.
+    </div>
+
+    <hr>
+
+    <h2 id="buildkit">BuildKit</h2>
+    <p>Hatch supporte BuildKit côté builder serveur. Deux directives utiles deviennent valides dans tes Dockerfiles :</p>
+
+    <h3>Cache mounts</h3>
+    <p>Les caches persistants entre builds accélèrent <code>npm ci</code>, <code>pip install</code>, <code>bundle install</code>, <code>go mod download</code>, etc.</p>
+
+<pre><code><span class="c"># syntax=docker/dockerfile:1.4</span>
+<span class="k">FROM</span> <span class="s">node:20-alpine</span>
+<span class="k">WORKDIR</span> <span class="s">/app</span>
+<span class="k">COPY</span> <span class="s">package*.json ./</span>
+<span class="k">RUN</span> <span class="s">--mount=type=cache,target=/root/.npm npm ci</span></code></pre>
+
+    <h3>Build secrets</h3>
+    <p>Les secrets de build (token npm privé, clé GitHub pour <code>go mod</code> sur des repos privés, etc.) sont déclarés côté serveur par l'opérateur Hatch et injectés via la session gRPC BuildKit. Le secret <strong>n'apparaît jamais</strong> dans l'image finale.</p>
+
+<pre><code><span class="c"># syntax=docker/dockerfile:1.4</span>
+<span class="k">RUN</span> <span class="s">--mount=type=secret,id=npm_token \
+    NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci</span></code></pre>
+
+    <div class="callout">
+      <strong>Activation</strong> — la session BuildKit s'enclenche côté serveur via <code>HATCH_BUILDKIT_SESSION=1</code>. Si ton instance ne l'a pas activée, les directives <code>--mount</code> seront ignorées par le builder legacy.
     </div>
 
     <hr>
@@ -324,6 +415,9 @@ footer.foot a { color: var(--text-mute); }
     <span class="k">retries:</span> <span class="n">20</span>             <span class="c"># défaut: 10</span></code></pre>
 
     <p>Le <code>cmd</code> est exécuté via <code>sh -c</code> dans le container. Timeout global pour devenir healthy : <strong>90 secondes</strong>. Si dépassé, le deploy échoue.</p>
+
+    <h3>Healthcheck HTTP post-deploy</h3>
+    <p>Une fois les containers <em>running</em>, Hatch effectue une vérification HTTP supplémentaire sur le service exposé : il attend qu'au moins une requête soit servie sur le port public, avec un <strong>timeout de 60 secondes</strong>. Si rien ne répond dans ce délai, la preview bascule en <code>failed</code> au lieu de rester coincée en <code>running</code> avec un service muet.</p>
 
     <hr>
 
@@ -470,6 +564,21 @@ footer.foot a { color: var(--text-mute); }
 
     <hr>
 
+    <h2 id="dashboard">Dashboard & logs</h2>
+    <p>Le dashboard <a href="https://hatchpr.dev/app"><code>/app</code></a> liste tes previews actives et expose, pour chacune :</p>
+    <ul>
+      <li>Le statut courant (<code>queued</code>, <code>building</code>, <code>running</code>, <code>failed</code>, <code>hibernated</code>)</li>
+      <li>Les logs de <strong>build</strong> et de <strong>runtime</strong> en streaming temps réel via SSE — pas de polling, les nouvelles lignes arrivent à la milliseconde</li>
+      <li>La gestion des <a href="#secrets">secrets</a> par repo (list / add / delete / backup chiffré)</li>
+    </ul>
+
+    <h2 id="securite">Sécurité</h2>
+    <ul>
+      <li><strong>Allowlist d'owners</strong> — les webhooks GitHub ne sont acceptés que pour les owners (user / org) listés dans <code>HATCH_ALLOWED_OWNERS</code> côté serveur. Toute PR d'un owner non listé est ignorée silencieusement.</li>
+      <li><strong>PR de fork</strong> — refusées par défaut. Le code d'un fork ne peut pas builder sur ton infra, ni accéder au secret store.</li>
+      <li><strong>Secrets en base</strong> — chiffrés AES-256, jamais loggés, jamais retournés en clair par l'API.</li>
+    </ul>
+
     <h2 id="ttl">Durée de vie & TTL</h2>
     <ul>
       <li>Une preview active reste en ligne tant que la PR est ouverte</li>
@@ -509,12 +618,8 @@ footer.foot a { color: var(--text-mute); }
     <h2 id="limites">Limites actuelles</h2>
     <p>Hatch est en beta. Ce qui n'est pas encore supporté :</p>
     <ul>
-      <li>Pas de <strong>BuildKit</strong> — les Dockerfiles qui utilisent <code>RUN --mount=type=cache</code> ou <code>--mount=type=secret</code> ne sont pas compatibles. Retire ces directives ou attends la prochaine version.</li>
-      <li>Docker 29+ avec <strong>containerd snapshotter</strong> par défaut — le builder legacy utilisé par Hatch ne fonctionne pas sur cette configuration. Utilise un Docker antérieur (&lt; 29) ou désactive le containerd snapshotter pour l'instant.</li>
+      <li>Docker 29+ avec <strong>containerd snapshotter</strong> par défaut — le builder utilisé par Hatch ne fonctionne pas sur cette configuration. Utilise un Docker antérieur (&lt; 29) ou désactive le containerd snapshotter pour l'instant.</li>
       <li>Pas de <strong>volumes persistants</strong> — la DB d'une preview est toujours repartie de zéro au redeploy (et c'est souvent ce qu'on veut)</li>
-      <li>Pas de <strong>secret store</strong> UI — pour des clés API de test, hardcode dans <code>.hatch.yml</code> (ne mets jamais de secrets de prod)</li>
-      <li>Pas de <strong>dashboard web</strong> — pour l'instant, status via le bot GitHub + logs serveur</li>
-      <li>Pas de <strong>ressources limites</strong> — chaque service peut consommer tout ce qu'il veut (à venir : CPU/RAM limits dans le yml)</li>
       <li>Pas de <strong>multi-region</strong> — une seule infra host pour l'instant</li>
     </ul>
 
