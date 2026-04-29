@@ -103,7 +103,7 @@ Les bugs et idées vivent dans les [issues GitHub](https://github.com/itsaam/hat
 
 ## Licence
 
-MIT — voir [LICENSE](./LICENSE).
+Voir [LICENSE](./LICENSE).
 
 ## Auteur
 
