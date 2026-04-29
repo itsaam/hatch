@@ -110,6 +110,15 @@ main { max-width: 1280px; margin: 0 auto; padding: 36px 28px 80px; }
   background: rgba(245,239,230,0.06);
 }
 .tab.active .count { background: rgba(15,13,10,0.25); opacity: 0.9; }
+.previews-toolbar {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.previews-toolbar .tabs { margin-bottom: 0; }
+.previews-toolbar .search {
+  flex: 1; min-width: 200px; max-width: 320px; margin-left: auto;
+  font-family: var(--font-mono); font-size: 12px;
+}
 
 /* ---------- previews table / cards ---------- */
 .card {
@@ -401,6 +410,7 @@ const state = {
   token: localStorage.getItem(TOKEN_KEY) || '',
   view: 'previews',       // 'previews' | 'secrets'
   filter: 'all',          // all | running | building | failed | expired
+  search: '',             // free-text filter on repo / branch / PR
   previews: null,         // null = loading, [] = loaded
   previewsErr: null,
   secrets: null,
@@ -1033,8 +1043,20 @@ function viewPreviews() {
     }
   }
 
+  const q = (state.search || '').trim().toLowerCase();
+  const matchesSearch = (p) => {
+    if (!q) return true;
+    const haystack = [
+      p.repo_full_name, p.branch, p.commit_sha,
+      p.pr_number != null ? '#' + p.pr_number : '',
+      p.pr_number != null ? String(p.pr_number) : '',
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(q);
+  };
   const filtered = previews
-    ? (state.filter === 'all' ? previews : previews.filter(p => p.status === state.filter))
+    ? previews.filter(p =>
+        (state.filter === 'all' || p.status === state.filter) && matchesSearch(p)
+      )
     : [];
 
   const sorted = [...filtered].sort((a, b) =>
@@ -1063,9 +1085,11 @@ function viewPreviews() {
   } else if (sorted.length === 0) {
     body = h('div', { class: 'state' },
       h('div', { class: 'title' }, 'Aucune preview'),
-      h('div', { class: 'sub' }, state.filter === 'all'
-        ? 'Ouvre une PR sur un repo avec .hatch.yml pour voir apparaître des previews.'
-        : `Aucune preview avec le statut "${state.filter}".`),
+      h('div', { class: 'sub' }, q
+        ? `Aucune preview ne correspond à « ${state.search} »${state.filter !== 'all' ? ` (statut "${state.filter}")` : ''}.`
+        : state.filter === 'all'
+          ? 'Ouvre une PR sur un repo avec .hatch.yml pour voir apparaître des previews.'
+          : `Aucune preview avec le statut "${state.filter}".`),
     );
   } else {
     const rows = sorted.map(p =>
@@ -1141,7 +1165,25 @@ function viewPreviews() {
       ),
       h('button', { class: 'btn', onClick: loadPreviews }, h('span', { html: svgIcon('redeploy') }), 'Refresh'),
     ),
-    h('div', { class: 'tabs' }, ...tabs),
+    h('div', { class: 'previews-toolbar' },
+      h('div', { class: 'tabs' }, ...tabs),
+      h('input', {
+        class: 'search',
+        type: 'search',
+        placeholder: 'Rechercher repo, branche, PR…',
+        value: state.search,
+        onInput: (e) => {
+          state.search = e.target.value;
+          render();
+          const input = document.querySelector('.previews-toolbar .search');
+          if (input) {
+            input.focus();
+            const len = input.value.length;
+            input.setSelectionRange(len, len);
+          }
+        },
+      }),
+    ),
     body,
   );
 }
