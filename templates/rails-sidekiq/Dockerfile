@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM ruby:3.3-slim
 
 ENV BUNDLE_WITHOUT="development:test" \
@@ -11,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY Gemfile* ./
-RUN bundle install --jobs 4 --retry 3
+RUN --mount=type=cache,target=/usr/local/bundle/cache \
+    bundle install --jobs 4 --retry 3
 
 COPY . .
 

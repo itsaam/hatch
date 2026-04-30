@@ -4,7 +4,8 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json ./
-RUN npm install --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --no-audit --no-fund
 
 # ---- builder ----
 FROM node:20-alpine AS builder
