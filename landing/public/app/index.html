@@ -559,6 +559,23 @@ function startPreviewsPolling() {
   schedule();
 }
 
+// Live "time ago" ticker: rewrites the textContent of every .when[data-iso]
+// cell each second so the user sees seconds elapse without force-refreshing.
+// Cheap (one querySelectorAll on a small table), pauses when tab is hidden.
+function startTimeAgoTicker() {
+  if (state._timeAgoTicker) return;
+  state._timeAgoTicker = setInterval(() => {
+    if (document.hidden) return;
+    const cells = document.querySelectorAll('[data-iso]');
+    for (const el of cells) {
+      const iso = el.getAttribute('data-iso');
+      if (!iso) continue;
+      const next = timeAgo(iso);
+      if (el.textContent !== next) el.textContent = next;
+    }
+  }, 1000);
+}
+
 async function loadSecrets() {
   state.secrets = null;
   state.secretsErr = null;
@@ -1109,7 +1126,7 @@ function viewPreviews() {
             ? h('a', { href: p.url, target: '_blank', rel: 'noopener' }, p.url.replace(/^https?:\/\//, ''))
             : h('span', { class: 'meta' }, '—'),
         ),
-        h('td', { class: 'when hide-sm' }, timeAgo(p.updated_at || p.created_at)),
+        h('td', { class: 'when hide-sm', 'data-iso': p.updated_at || p.created_at || '' }, timeAgo(p.updated_at || p.created_at)),
         h('td', {},
           h('div', { class: 'actions' },
             p.url
@@ -1471,6 +1488,7 @@ document.addEventListener('keydown', (e) => {
 
 // boot
 render();
+startTimeAgoTicker();
 if (state.token) {
   loadPreviews();
   startPreviewsPolling();
