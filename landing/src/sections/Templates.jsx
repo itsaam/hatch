@@ -6,7 +6,7 @@ import RevealText from '../components/RevealText.jsx'
 
 gsap.registerPlugin(ScrollTrigger)
 
-const REPO_BASE = 'https://github.com/hatchpr'
+const REPO_BASE = 'https://github.com/itsaam'
 
 const templates = [
   {
