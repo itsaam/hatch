@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-if [ "${RUN_MODE:-web}" = "worker" ]; then
-  exec bundle exec sidekiq -r ./config/environment.rb
-fi
-
-# web mode — no migrations (preview seed handled by Hatch via seed/preview.sql)
-exec bundle exec puma -C config/puma.rb
