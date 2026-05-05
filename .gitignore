@@ -20,6 +20,10 @@ pnpm-debug.log*
 .env.local
 .env.*.local
 
+# Local compose overrides (deployment-specific, never commit)
+docker-compose.override.yml
+docker-compose.override.yaml
+
 # OS / Editor
 .DS_Store
 .vscode/*

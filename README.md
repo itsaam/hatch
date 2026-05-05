@@ -71,10 +71,34 @@ Le [demo repo](https://github.com/itsaam/hatch-demo-node) montre un stack Node +
 core/api/            Control plane Go — webhook, deployer, reconciler, bot GitHub
 landing/             Site marketing + docs + dashboard (Vite + React)
 templates/           Templates de démarrage (Next.js, FastAPI, Django, Rails, static)
+security/            Hardening optionnel du socket Docker (proxy + body filter)
 docker-compose.yml   Déploiement du control plane lui-même
 ```
 
 Backend Go 1.23 (chi + pgx/v5), PostgreSQL 16, Docker Engine API en direct via socket Unix (pas de SDK), Traefik en reverse proxy (réutilisé si déjà présent sur l'host, ex. Dokploy), GitHub App auth via JWT RS256 + installation tokens.
+
+## Sécurité
+
+Le control plane parle au Docker Engine pour build et lancer les previews.
+Monter `/var/run/docker.sock` brut dans `api` est équivalent à donner root sur
+l'host : une RCE dans `api` permettrait de lancer un container `--privileged`
+avec `/` bind-mounté, et de pivoter sur tout le serveur.
+
+`security/` fournit une isolation à deux étages, à activer via un
+`docker-compose.override.yml` (cf. [`security/README.md`](./security/README.md)) :
+
+- **Layer 1** — [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
+  filtre l'API par endpoint et bloque tout ce dont hatch n'a pas besoin
+  (`/volumes`, `/swarm`, `/secrets`, `/system`, `/plugins`, …).
+- **Layer 2** — `security/body_filter.py`, un reverse-proxy Python ~150 lignes
+  qui inspecte les bodies de `POST /containers/create` et rejette
+  `Privileged`, `CapAdd: SYS_ADMIN`/etc., `NetworkMode/PidMode/IpcMode=host`,
+  `seccomp/apparmor=unconfined`, `Devices`, `Runtime` non-runc, et tout bind
+  mount sortant d'une allowlist de chemins host.
+
+Une fois en place, une compromission de `api` reste cantonnée à ce que hatch
+fait déjà (créer des previews avec `Memory` / `NanoCpus` / `RestartPolicy`),
+sans s'évader sur l'host. Chaque blocage est loggué.
 
 ## Installation self-host
 
