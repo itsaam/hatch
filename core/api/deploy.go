@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,9 +59,11 @@ type Deployer struct {
 
 	// locks serializes concurrent Deploy() calls for the same (repo, pr) so
 	// two near-simultaneous webhooks (e.g. reopen + synchronize) don't race
-	// on container names or the per-PR network.
+	// on container names or the per-PR network. Entries are refcounted: a
+	// long-lived service that processes thousands of PRs would otherwise
+	// see locks grow without bound.
 	locksMu sync.Mutex
-	locks   map[string]*sync.Mutex
+	locks   map[string]*lockEntry
 
 	// deploySem is a counting semaphore that caps the number of Deploy()
 	// calls executing concurrently across the whole process. It defends
@@ -68,6 +72,29 @@ type Deployer struct {
 	// build 20 stacks at once and thrash the box. A nil channel means
 	// "no limit" (only used in tests).
 	deploySem chan struct{}
+
+	// queueSlots bounds the number of in-flight async Deploy/Destroy
+	// goroutines (those queued before the deploySem plus those actively
+	// running). Without this, a webhook flood from an allow-listed owner
+	// could spawn unbounded goroutines all blocked on deploySem. A nil
+	// channel means "no limit" (only used in tests). DeployAsync and
+	// DestroyAsync acquire one slot non-blockingly and release it when the
+	// goroutine returns.
+	queueSlots chan struct{}
+
+	// wg tracks every goroutine spawned by DeployAsync / DestroyAsync.
+	// Shutdown waits on it so an in-flight build isn't abruptly killed at
+	// process exit (mid-build → orphan containers / images on the host).
+	wg sync.WaitGroup
+
+	// closed is set to true by Shutdown. New DeployAsync / DestroyAsync
+	// calls observe it and return false (rejected) instead of spawning.
+	closed atomic.Bool
+}
+
+type lockEntry struct {
+	m    *sync.Mutex
+	refs int
 }
 
 // SetAppClient wires the GitHub App client used to fetch `.hatch.yml` and
@@ -86,19 +113,31 @@ func NewDeployer(pool *pgxpool.Pool, netName, domain string, maxConcurrent int) 
 	if maxConcurrent > 0 {
 		sem = make(chan struct{}, maxConcurrent)
 	}
+	// Queue depth: leave headroom for bursts but reject past a hard cap.
+	// 8× the concurrent slots covers typical "open 20 PRs at once" without
+	// letting a webhook flood spawn unbounded goroutines. Floor at 16.
+	queueCap := maxConcurrent * 8
+	if queueCap < 16 {
+		queueCap = 16
+	}
+	var queueSlots chan struct{}
+	if maxConcurrent > 0 {
+		queueSlots = make(chan struct{}, queueCap)
+	}
 	return &Deployer{
 		// Timeout=0 : request lifetime is bound by the caller's context,
 		// which is sized per operation (25min for deploys, 1min for destroys).
 		// A client-level timeout would just add a second deadline to debug.
 		http:       &http.Client{Transport: tr},
 		httpExt:    &http.Client{Timeout: 30 * time.Second},
-		locks:      make(map[string]*sync.Mutex),
+		locks:      make(map[string]*lockEntry),
 		pool:       pool,
 		network:    netName,
 		domain:     domain,
 		notifier:   noopNotifier{},
 		dockerBase: "http://docker",
 		deploySem:  sem,
+		queueSlots: queueSlots,
 	}, nil
 }
 
@@ -116,17 +155,104 @@ func (d *Deployer) SetNotifier(n StatusNotifier) {
 	d.notifier = n
 }
 
-// lockFor returns a mutex unique to (repo, pr). Created lazily on first use.
-func (d *Deployer) lockFor(repo string, pr int) *sync.Mutex {
+// acquireLock returns a mutex unique to (repo, pr), refcounted. Callers must
+// pair it with releaseLock once the mutex is unlocked, otherwise the entry
+// stays in the map forever (a repo doing thousands of PRs over the service
+// lifetime would otherwise leak entries).
+func (d *Deployer) acquireLock(repo string, pr int) *sync.Mutex {
 	key := fmt.Sprintf("%s#%d", repo, pr)
 	d.locksMu.Lock()
 	defer d.locksMu.Unlock()
-	m, ok := d.locks[key]
+	e, ok := d.locks[key]
 	if !ok {
-		m = &sync.Mutex{}
-		d.locks[key] = m
+		e = &lockEntry{m: &sync.Mutex{}}
+		d.locks[key] = e
 	}
-	return m
+	e.refs++
+	return e.m
+}
+
+func (d *Deployer) releaseLock(repo string, pr int) {
+	key := fmt.Sprintf("%s#%d", repo, pr)
+	d.locksMu.Lock()
+	defer d.locksMu.Unlock()
+	e, ok := d.locks[key]
+	if !ok {
+		return
+	}
+	e.refs--
+	if e.refs <= 0 {
+		delete(d.locks, key)
+	}
+}
+
+// DeployAsync spawns a tracked goroutine that runs Deploy(ref). Returns false
+// if the queue is full (caller should reply 503 so the upstream can retry) or
+// if the deployer has been shut down. Panics inside the goroutine are
+// recovered and logged so a single bad build can't take down the API.
+func (d *Deployer) DeployAsync(ref PreviewRef) bool {
+	return d.spawn(ref, "deploy", d.Deploy)
+}
+
+// DestroyAsync is the async counterpart to Destroy. Same contract as
+// DeployAsync.
+func (d *Deployer) DestroyAsync(ref PreviewRef) bool {
+	return d.spawn(ref, "destroy", d.Destroy)
+}
+
+func (d *Deployer) spawn(ref PreviewRef, kind string, fn func(PreviewRef)) bool {
+	if d.closed.Load() {
+		return false
+	}
+	if d.queueSlots != nil {
+		select {
+		case d.queueSlots <- struct{}{}:
+		default:
+			log.Printf("%s rejected (queue full): %s#%d", kind, ref.Repo, ref.PR)
+			return false
+		}
+	}
+	// Re-check after acquiring the slot: Shutdown may have flipped the flag
+	// concurrently. Releasing the slot keeps the queue accurate.
+	if d.closed.Load() {
+		if d.queueSlots != nil {
+			<-d.queueSlots
+		}
+		return false
+	}
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		if d.queueSlots != nil {
+			defer func() { <-d.queueSlots }()
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("PANIC in %s %s#%d: %v\n%s",
+					kind, ref.Repo, ref.PR, r, debug.Stack())
+			}
+		}()
+		fn(ref)
+	}()
+	return true
+}
+
+// Shutdown marks the deployer closed (no new async jobs accepted) and waits
+// for in-flight Deploy/Destroy goroutines to finish, or until ctx is done.
+// Returns ctx.Err() if the deadline fired with goroutines still running.
+func (d *Deployer) Shutdown(ctx context.Context) error {
+	d.closed.Store(true)
+	done := make(chan struct{})
+	go func() {
+		d.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (d *Deployer) Deploy(ref PreviewRef) {
@@ -140,9 +266,12 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 		defer func() { <-d.deploySem }()
 	}
 
-	lock := d.lockFor(ref.Repo, ref.PR)
+	lock := d.acquireLock(ref.Repo, ref.PR)
 	lock.Lock()
-	defer lock.Unlock()
+	defer func() {
+		lock.Unlock()
+		d.releaseLock(ref.Repo, ref.PR)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
@@ -182,9 +311,12 @@ func (d *Deployer) Deploy(ref PreviewRef) {
 }
 
 func (d *Deployer) Destroy(ref PreviewRef) {
-	lock := d.lockFor(ref.Repo, ref.PR)
+	lock := d.acquireLock(ref.Repo, ref.PR)
 	lock.Lock()
-	defer lock.Unlock()
+	defer func() {
+		lock.Unlock()
+		d.releaseLock(ref.Repo, ref.PR)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()

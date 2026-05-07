@@ -193,9 +193,17 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
-			go deployer.Deploy(ref)
+			if !deployer.DeployAsync(ref) {
+				// Queue full or shutting down. 503 lets GitHub retry the
+				// webhook on its own backoff schedule.
+				http.Error(w, "deploy queue full", http.StatusServiceUnavailable)
+				return
+			}
 		case "closed":
-			go deployer.Destroy(ref)
+			if !deployer.DestroyAsync(ref) {
+				http.Error(w, "destroy queue full", http.StatusServiceUnavailable)
+				return
+			}
 		}
 
 		writeOK(w)

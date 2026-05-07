@@ -410,9 +410,15 @@ func previewRedeployHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handler
 			return
 		}
 
-		// Fire and forget — Deploy owns its own 25-minute context. Same pattern
-		// as the GitHub webhook path.
-		go deployer.Deploy(ref)
+		// Tracked async — Deploy owns its own 25-minute context. Same pattern
+		// as the GitHub webhook path. Reject if the queue is full so the
+		// caller can retry instead of silently dropping the request.
+		if !deployer.DeployAsync(ref) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "deploy queue full, retry later",
+			})
+			return
+		}
 
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"ok":      true,

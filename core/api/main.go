@@ -204,6 +204,17 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown: %v", err)
 	}
+
+	// Drain in-flight async Deploy/Destroy goroutines triggered by past
+	// webhooks. We give them a bounded window — a full build can take 25min
+	// and we don't want SIGTERM to hang forever — but cutting them off
+	// immediately would leave orphan containers / images on the host.
+	deployShutdownCtx, deployCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer deployCancel()
+	if err := deployer.Shutdown(deployShutdownCtx); err != nil {
+		log.Printf("deployer shutdown: in-flight builds did not drain in time: %v", err)
+	}
+
 	log.Printf("hatch api stopped")
 }
 
