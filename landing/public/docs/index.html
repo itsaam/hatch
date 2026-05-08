@@ -185,6 +185,7 @@ footer.foot a { color: var(--text-mute); }
       <div class="group-title">Référence</div>
       <ul>
         <li><a href="#config">Format <code>.hatch.yml</code></a></li>
+        <li><a href="#previews">Triggers & skip</a></li>
         <li><a href="#limits">Resource limits</a></li>
         <li><a href="#variables">Variables</a></li>
         <li><a href="#secrets">Secret store</a></li>
@@ -333,6 +334,59 @@ footer.foot a { color: var(--text-mute); }
       <li><code>port</code> est auto-détecté depuis le Dockerfile si absent</li>
       <li>Les valeurs <code>env</code> supportent la substitution de <a href="#variables">variables</a></li>
     </ul>
+
+    <hr>
+
+    <h2 id="previews">Triggers & skip</h2>
+    <p>Par défaut, Hatch déploie une preview à chaque PR ouverte ou mise à jour. Deux comportements ajustables via le bloc <code>previews:</code> de ton <code>.hatch.yml</code> :</p>
+
+    <h3>Skip doc-only (défaut activé)</h3>
+    <p>Si une PR ne touche que de la documentation (Markdown, PDF, <code>LICENSE</code>, <code>docs/**</code>, <code>.github/**</code>, <code>.gitignore</code>, etc.), Hatch <strong>ne build pas</strong> et poste un commentaire d'info à la place. Les patterns par défaut couvrent les extensions et chemins suivants :</p>
+    <pre><code><span class="c"># défauts intégrés</span>
+**/*.md
+**/*.mdx
+**/*.txt
+**/*.pdf
+**/*.rst
+LICENSE*
+CHANGELOG*
+AUTHORS*
+CONTRIBUTORS*
+CODEOWNERS
+docs/**
+.github/**
+.gitignore
+.gitattributes
+.editorconfig</code></pre>
+
+    <p>Pour <strong>désactiver</strong> ce skip (forcer un build même pour des changements doc-only), ajoute dans <code>.hatch.yml</code> :</p>
+<pre><code><span class="k">previews:</span>
+  <span class="k">skip_when_only:</span> <span class="s">false</span></code></pre>
+
+    <p>Pour <strong>remplacer</strong> la liste par défaut par tes propres patterns (les deux fonctionnent ensemble : <code>skip_paths</code> définit ce qui est considéré comme "skippable", <code>skip_when_only</code> active ou non le skip) :</p>
+<pre><code><span class="k">previews:</span>
+  <span class="k">skip_paths:</span>
+    - <span class="s">"**/*.md"</span>
+    - <span class="s">"docs/**"</span>
+    - <span class="s">"my-blog/**"</span></code></pre>
+
+    <h3>Mode opt-in via @mention</h3>
+    <p>Plutôt que builder à chaque PR, tu peux passer en mode <strong>opt-in</strong> : Hatch ne déploie que quand tu mentionnes le bot dans un commentaire de PR.</p>
+<pre><code><span class="k">previews:</span>
+  <span class="k">trigger:</span> <span class="s">mention</span>   <span class="c"># défaut: auto</span></code></pre>
+    <p>Une fois la preview amorcée par un <code>@hatchpr</code>, les commits suivants sur la branche rebuildent automatiquement (pas besoin de re-mentionner). La fermeture de PR continue de détruire la preview, peu importe le mode.</p>
+
+    <h3>Commandes <code>@hatchpr</code></h3>
+    <p>Quel que soit le mode, tu peux piloter une preview en mentionnant le bot dans un commentaire :</p>
+    <table>
+      <thead><tr><th>Commentaire</th><th>Effet</th></tr></thead>
+      <tbody>
+        <tr><td><code>@hatchpr</code> ou <code>@hatchpr preview</code></td><td>Déploie / redéploie la preview</td></tr>
+        <tr><td><code>@hatchpr deploy</code> / <code>redeploy</code> / <code>rebuild</code></td><td>Idem (alias)</td></tr>
+        <tr><td><code>@hatchpr delete</code> / <code>destroy</code> / <code>down</code></td><td>Détruit la preview en cours</td></tr>
+      </tbody>
+    </table>
+    <p>Seul l'auteur de la PR ou un collaborateur du repo peut déclencher une commande. Un utilisateur non autorisé reçoit un commentaire d'erreur explicite.</p>
 
     <hr>
 

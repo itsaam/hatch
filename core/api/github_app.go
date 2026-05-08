@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -134,8 +135,8 @@ func (c *AppClient) installationToken(ctx context.Context, installationID int64)
 		return "", err
 	}
 
-	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", c.baseURL, installationID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	endpoint := fmt.Sprintf("%s/app/installations/%d/access_tokens", c.baseURL, installationID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return "", fmt.Errorf("installation token req: %w", err)
 	}
@@ -195,12 +196,13 @@ func (c *AppClient) CommentPR(ctx context.Context, installationID int64, owner, 
 	if err != nil {
 		return 0, err
 	}
-	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", c.baseURL, owner, repo, prNumber)
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments",
+		c.baseURL, url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	payload, err := json.Marshal(commentBody{Body: body})
 	if err != nil {
 		return 0, fmt.Errorf("comment encode: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return 0, fmt.Errorf("comment req: %w", err)
 	}
@@ -233,12 +235,13 @@ func (c *AppClient) UpdateComment(ctx context.Context, installationID int64, own
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s/repos/%s/%s/issues/comments/%d", c.baseURL, owner, repo, commentID)
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/comments/%d",
+		c.baseURL, url.PathEscape(owner), url.PathEscape(repo), commentID)
 	payload, err := json.Marshal(commentBody{Body: body})
 	if err != nil {
 		return fmt.Errorf("update comment encode: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("update comment req: %w", err)
 	}
@@ -265,4 +268,133 @@ func splitRepo(full string) (owner, repo string, ok bool) {
 		return "", "", false
 	}
 	return full[:idx], full[idx+1:], true
+}
+
+// prFile is the subset of GitHub's PR files payload we care about.
+type prFile struct {
+	Filename string `json:"filename"`
+}
+
+// ListPRFiles returns the changed file paths of a PR, paginated. Hard-capped
+// at 3000 files: above that, GitHub stops returning more pages anyway, and we
+// would rather just build than scan a megacommit forever.
+func (c *AppClient) ListPRFiles(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]string, error) {
+	tok, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	const perPage = 100
+	const maxPages = 30
+	var out []string
+	for page := 1; page <= maxPages; page++ {
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/files?per_page=%d&page=%d",
+			c.baseURL, url.PathEscape(owner), url.PathEscape(repo), prNumber, perPage, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("pr files req: %w", err)
+		}
+		req.Header.Set("Authorization", "token "+tok)
+		c.setCommonHeaders(req)
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("pr files do: %w", err)
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+		resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("pr files http %d: %s", resp.StatusCode, truncate(string(body), 300))
+		}
+		var batch []prFile
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, fmt.Errorf("pr files decode: %w", err)
+		}
+		for _, f := range batch {
+			if f.Filename != "" {
+				out = append(out, f.Filename)
+			}
+		}
+		if len(batch) < perPage {
+			break
+		}
+	}
+	return out, nil
+}
+
+// IsCollaborator reports whether `username` has push access to `owner/repo`.
+// GitHub returns 204 for "yes", 404 for "no". Any other status is an error.
+func (c *AppClient) IsCollaborator(ctx context.Context, installationID int64, owner, repo, username string) (bool, error) {
+	tok, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return false, err
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/collaborators/%s",
+		c.baseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(username))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false, fmt.Errorf("collab req: %w", err)
+	}
+	req.Header.Set("Authorization", "token "+tok)
+	c.setCommonHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("collab do: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+	return false, fmt.Errorf("collab http %d: %s", resp.StatusCode, truncate(string(body), 200))
+}
+
+// pullState is the slice of GET /pulls/{n} we need when an issue_comment
+// event triggers a deploy: the head SHA + branch + state, since the comment
+// payload only carries the issue/PR number.
+type pullState struct {
+	State string `json:"state"`
+	Head  struct {
+		Ref  string `json:"ref"`
+		SHA  string `json:"sha"`
+		Repo struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
+	} `json:"head"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+// GetPullRequest returns the canonical state of a PR (state, head sha/ref,
+// author). Used by the issue_comment handler since comment payloads only
+// reference the PR by number.
+func (c *AppClient) GetPullRequest(ctx context.Context, installationID int64, owner, repo string, prNumber int) (*pullState, error) {
+	tok, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/pulls/%d",
+		c.baseURL, url.PathEscape(owner), url.PathEscape(repo), prNumber)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get pr req: %w", err)
+	}
+	req.Header.Set("Authorization", "token "+tok)
+	c.setCommonHeaders(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get pr do: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("get pr http %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	var out pullState
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("get pr decode: %w", err)
+	}
+	return &out, nil
 }

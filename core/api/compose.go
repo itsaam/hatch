@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -23,7 +24,31 @@ type ComposeSpec struct {
 	Version  int                        `yaml:"version"`
 	Services map[string]*ComposeService `yaml:"services"`
 	Seed     *ComposeSeed               `yaml:"seed,omitempty"`
+	Previews *PreviewsConfig            `yaml:"previews,omitempty"`
 }
+
+// PreviewsConfig governs when the GitHub webhook produces a preview deploy.
+// All fields are optional; defaults live in EffectivePreviews.
+type PreviewsConfig struct {
+	// Trigger selects the auto-deploy policy for opened/reopened PRs:
+	//   "auto"    — build on every PR event (default)
+	//   "mention" — opt-in: only build after the user @-mentions the bot
+	Trigger string `yaml:"trigger,omitempty"`
+
+	// SkipWhenOnly toggles the "skip preview when only documentation changed"
+	// shortcut. Default true. Set to false to force-build doc-only PRs.
+	SkipWhenOnly *bool `yaml:"skip_when_only,omitempty"`
+
+	// SkipPaths overrides the default doc/glob list. When set, replaces the
+	// built-in list rather than extending it (kept simple on purpose).
+	SkipPaths []string `yaml:"skip_paths,omitempty"`
+}
+
+// Trigger modes.
+const (
+	TriggerAuto    = "auto"
+	TriggerMention = "mention"
+)
 
 // ComposeService is one service of the stack. `build` and `image` are
 // mutually exclusive.
@@ -180,7 +205,38 @@ func validateCompose(spec *ComposeSpec) error {
 			return errors.New("hatch.yml: seed.sql is required")
 		}
 	}
+	if spec.Previews != nil {
+		switch strings.ToLower(strings.TrimSpace(spec.Previews.Trigger)) {
+		case "", TriggerAuto, TriggerMention:
+		default:
+			return fmt.Errorf("hatch.yml: previews.trigger %q invalid (want auto|mention)", spec.Previews.Trigger)
+		}
+	}
 	return nil
+}
+
+// EffectivePreviews resolves the previews block against built-in defaults.
+// Always returns a non-nil pointer.
+func EffectivePreviews(spec *ComposeSpec) PreviewsConfig {
+	out := PreviewsConfig{
+		Trigger:   TriggerAuto,
+		SkipPaths: append([]string(nil), defaultSkipPaths...),
+	}
+	t := true
+	out.SkipWhenOnly = &t
+	if spec == nil || spec.Previews == nil {
+		return out
+	}
+	if v := strings.ToLower(strings.TrimSpace(spec.Previews.Trigger)); v != "" {
+		out.Trigger = v
+	}
+	if spec.Previews.SkipWhenOnly != nil {
+		out.SkipWhenOnly = spec.Previews.SkipWhenOnly
+	}
+	if len(spec.Previews.SkipPaths) > 0 {
+		out.SkipPaths = append([]string(nil), spec.Previews.SkipPaths...)
+	}
+	return out
 }
 
 // FallbackCompose synthesises a single-service spec for repos with no
@@ -332,14 +388,41 @@ func ExposedService(spec *ComposeSpec) string {
 
 // --- GitHub raw fetch -------------------------------------------------------
 
-// githubRawURL builds the api.github.com contents URL for a given file.
+// githubContentsURL builds the api.github.com contents URL for a given file.
 // Using /repos/.../contents/<path> returns the decoded raw bytes when
 // Accept: application/vnd.github.raw is set, and works equally with or
-// without an installation token.
-func githubContentsURL(repo, path, ref string) string {
-	cleaned := strings.TrimPrefix(path, "./")
+// without an installation token. Path components (owner, repo, file path)
+// are URL-encoded as defense in depth — GitHub identifiers exclude the
+// problematic chars but the HMAC-authenticated webhook is not the only
+// caller (e.g. installation token URL also uses fmt-style concatenation).
+func githubContentsURL(repo, p, ref string) string {
+	owner, name, ok := splitRepo(repo)
+	if !ok {
+		// Best-effort: pass the raw value through escaped as a single
+		// segment. The caller will typically receive a 404 from GitHub
+		// rather than a malformed URL crash.
+		return fmt.Sprintf("https://api.github.com/repos/%s/contents/%s?ref=%s",
+			url.PathEscape(repo), escapeContentPath(p), url.QueryEscape(ref))
+	}
+	return fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s?ref=%s",
+		url.PathEscape(owner), url.PathEscape(name),
+		escapeContentPath(p), url.QueryEscape(ref))
+}
+
+// escapeContentPath escapes each path segment of a relative file path while
+// preserving "/" separators (PathEscape would encode them to %2F and break
+// the GitHub contents API).
+func escapeContentPath(p string) string {
+	cleaned := strings.TrimPrefix(p, "./")
 	cleaned = strings.TrimPrefix(cleaned, "/")
-	return fmt.Sprintf("https://api.github.com/repos/%s/contents/%s?ref=%s", repo, cleaned, ref)
+	if cleaned == "" {
+		return ""
+	}
+	parts := strings.Split(cleaned, "/")
+	for i, seg := range parts {
+		parts[i] = url.PathEscape(seg)
+	}
+	return strings.Join(parts, "/")
 }
 
 // fetchRepoFile downloads a file from a GitHub repo at a specific commit.

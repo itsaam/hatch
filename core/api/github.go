@@ -29,6 +29,8 @@ const (
 	commentFailed    = "❌ Preview failed. Check the API logs for details."
 	commentTakenDown = "🧹 Preview taken down."
 	commentHibernate = "💤 Preview hibernated after %d days of inactivity."
+	commentSkipDocs  = "📄 Pas de preview : changements doc-only. Override avec `previews.skip_when_only: false` dans `.hatch.yml`."
+	commentMention   = "💤 Mode opt-in (`previews.trigger: mention`). Mentionne `@%s` dans un commentaire pour déclencher une preview."
 )
 
 type prEvent struct {
@@ -73,7 +75,7 @@ func (n *prNotifier) OnStatusChange(ctx context.Context, ref PreviewRef, status,
 	var body string
 	switch status {
 	case "running":
-		body = fmtSafe(commentReady, publicURL)
+		body = fmt.Sprintf(commentReady, publicURL)
 	case "failed":
 		body = commentFailed
 	case "building":
@@ -106,14 +108,14 @@ func (n *prNotifier) OnHibernated(ctx context.Context, ref PreviewRef, days int)
 	}
 	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	body := fmtSafe(commentHibernate, days)
+	body := fmt.Sprintf(commentHibernate, days)
 	if err := n.app.UpdateComment(cctx, ref.InstallationID, owner, repo, ref.CommentID, body); err != nil {
 		log.Printf("hibernate comment %s#%d: %v", ref.Repo, ref.PR, err)
 	}
 	_ = ctx
 }
 
-func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool) http.HandlerFunc {
+func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 		if err != nil {
@@ -129,6 +131,10 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 		event := r.Header.Get(eventHeader)
 		if event == "ping" {
 			writeOK(w)
+			return
+		}
+		if event == "issue_comment" {
+			handleIssueCommentEvent(w, r, body, pool, deployer, app, allowedOwners, botHandle)
 			return
 		}
 		if event != "pull_request" {
@@ -172,14 +178,8 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 		}
 		// -------------------------------------------------------------
 
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
-
-		if err := handlePullRequest(ctx, pool, app, ev); err != nil {
-			log.Printf("handle pull_request: %v", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
-			return
-		}
 
 		ref := PreviewRef{
 			Repo:           ev.Repository.FullName,
@@ -188,18 +188,59 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			SHA:            ev.PullRequest.Head.SHA,
 			InstallationID: ev.Installation.ID,
 		}
-		// Load the comment id persisted (if any) so notifier can update it.
-		ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
 
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
+			switch decidePullRequestTrigger(ctx, deployer.HTTPExt(), app, pool, ev, botHandle) {
+			case decisionSkipMention:
+				log.Printf("preview skip (mention mode): %s#%d", ev.Repository.FullName, ev.Number)
+				if app != nil && ev.Installation.ID != 0 && ev.Action == "opened" {
+					owner, repo, ok := splitRepo(ev.Repository.FullName)
+					if ok {
+						body := fmt.Sprintf(commentMention, botHandle)
+						if _, err := app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Number, body); err != nil {
+							log.Printf("mention notice comment %s#%d: %v", ev.Repository.FullName, ev.Number, err)
+						}
+					}
+				}
+				writeOK(w)
+				return
+			case decisionSkipDocs:
+				log.Printf("preview skip (docs-only): %s#%d", ev.Repository.FullName, ev.Number)
+				if app != nil && ev.Installation.ID != 0 && ev.Action == "opened" {
+					owner, repo, ok := splitRepo(ev.Repository.FullName)
+					if ok {
+						if _, err := app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Number, commentSkipDocs); err != nil {
+							log.Printf("skip-docs comment %s#%d: %v", ev.Repository.FullName, ev.Number, err)
+						}
+					}
+				}
+				writeOK(w)
+				return
+			case decisionBuild:
+				// fall through to the deploy path
+			}
+
+			if err := handlePullRequest(ctx, pool, app, ev); err != nil {
+				log.Printf("handle pull_request: %v", err)
+				http.Error(w, "internal", http.StatusInternalServerError)
+				return
+			}
+			ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
 			if !deployer.DeployAsync(ref) {
 				// Queue full or shutting down. 503 lets GitHub retry the
 				// webhook on its own backoff schedule.
 				http.Error(w, "deploy queue full", http.StatusServiceUnavailable)
 				return
 			}
+
 		case "closed":
+			if err := handlePullRequest(ctx, pool, app, ev); err != nil {
+				log.Printf("handle pull_request: %v", err)
+				http.Error(w, "internal", http.StatusInternalServerError)
+				return
+			}
+			ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
 			if !deployer.DestroyAsync(ref) {
 				http.Error(w, "destroy queue full", http.StatusServiceUnavailable)
 				return
@@ -208,6 +249,72 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		writeOK(w)
 	}
+}
+
+// triggerDecision encodes whether a pull_request event should produce a
+// build, be silently skipped (mention mode), or short-circuit because only
+// documentation files changed.
+type triggerDecision int
+
+const (
+	decisionBuild triggerDecision = iota
+	decisionSkipMention
+	decisionSkipDocs
+)
+
+// decidePullRequestTrigger applies the .hatch.yml previews policy to the
+// incoming event. Network errors fail open (we build) — better a useless
+// build than a missed preview.
+func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, pool *pgxpool.Pool, ev prEvent, botHandle string) triggerDecision {
+	spec, _, err := loadComposeForRef(ctx, httpClient, app, ev.Installation.ID, ev.Repository.FullName, ev.PullRequest.Head.SHA)
+	if err != nil {
+		log.Printf("decide trigger: load compose %s#%d: %v (defaulting to build)", ev.Repository.FullName, ev.Number, err)
+		return decisionBuild
+	}
+	cfg := EffectivePreviews(spec)
+
+	if cfg.Trigger == TriggerMention {
+		// In mention mode, the very first deploy must be initiated by an
+		// @mention. Once a preview row exists (and is not closed) we treat
+		// later synchronize events as "keep the live preview fresh".
+		if !(ev.Action == "synchronize" && previewExists(ctx, pool, ev.Repository.FullName, ev.Number)) {
+			return decisionSkipMention
+		}
+		// Fall through to docs-only check.
+	}
+
+	if cfg.SkipWhenOnly != nil && *cfg.SkipWhenOnly && app != nil && ev.Installation.ID != 0 {
+		owner, repo, ok := splitRepo(ev.Repository.FullName)
+		if ok {
+			files, err := app.ListPRFiles(ctx, ev.Installation.ID, owner, repo, ev.Number)
+			if err != nil {
+				log.Printf("decide trigger: list pr files %s#%d: %v (defaulting to build)", ev.Repository.FullName, ev.Number, err)
+			} else if allFilesMatchSkip(files, cfg.SkipPaths) {
+				return decisionSkipDocs
+			}
+		}
+	}
+	return decisionBuild
+}
+
+// previewExists returns true when a preview row is already tracked for the
+// PR and not in a terminal "closed" state. Used by mention mode to decide
+// whether a synchronize should rebuild silently. Transient DB errors are
+// logged and treated as "no preview" — the worst case is a missed silent
+// rebuild that the user can re-trigger via @mention.
+func previewExists(ctx context.Context, pool *pgxpool.Pool, repo string, pr int) bool {
+	var status string
+	err := pool.QueryRow(ctx,
+		`SELECT status FROM previews WHERE repo_full_name=$1 AND pr_number=$2`,
+		repo, pr).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		log.Printf("preview exists %s#%d: %v", repo, pr, err)
+		return false
+	}
+	return status != "closed"
 }
 
 func handlePullRequest(ctx context.Context, pool *pgxpool.Pool, app *AppClient, ev prEvent) error {
@@ -267,7 +374,7 @@ func ensurePRComment(ctx context.Context, pool *pgxpool.Pool, app *AppClient, ev
 	if existing == 0 {
 		body := commentInitial
 		if ev.Action == "synchronize" {
-			body = fmtSafe(commentRebuild, shortSHA(ev.PullRequest.Head.SHA))
+			body = fmt.Sprintf(commentRebuild, shortSHA(ev.PullRequest.Head.SHA))
 		}
 		id, err := app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Number, body)
 		if err != nil {
@@ -282,7 +389,7 @@ func ensurePRComment(ctx context.Context, pool *pgxpool.Pool, app *AppClient, ev
 	// Existing comment: update the body to reflect the new action.
 	body := commentInitial
 	if ev.Action == "synchronize" {
-		body = fmtSafe(commentRebuild, shortSHA(ev.PullRequest.Head.SHA))
+		body = fmt.Sprintf(commentRebuild, shortSHA(ev.PullRequest.Head.SHA))
 	}
 	return app.UpdateComment(ctx, ev.Installation.ID, owner, repo, existing, body)
 }
@@ -358,9 +465,4 @@ func nullableInt64(v int64) any {
 		return nil
 	}
 	return v
-}
-
-// fmtSafe wraps fmt.Sprintf to keep comment formatting in one place.
-func fmtSafe(tmpl string, args ...any) string {
-	return fmt.Sprintf(tmpl, args...)
 }

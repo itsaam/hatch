@@ -94,7 +94,7 @@ func TestWebhookAuthz(t *testing.T) {
 
 	// The handler passes nil pool/deployer/app. We rely on the gates
 	// returning *before* any of those are dereferenced.
-	h := githubWebhookHandler(nil, secret, nil, nil, allowed)
+	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr")
 
 	tests := []struct {
 		name       string
@@ -153,7 +153,7 @@ func TestWebhookAuthz(t *testing.T) {
 func TestWebhookAuthz_BadSig(t *testing.T) {
 	secret := []byte("testsecret")
 	allowed := parseAllowedOwners("itsaam")
-	h := githubWebhookHandler(nil, secret, nil, nil, allowed)
+	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr")
 
 	body := newPREvent("opened", "itsaam/hatch-demo", "itsaam/hatch-demo")
 	req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(body))
@@ -169,7 +169,7 @@ func TestWebhookAuthz_BadSig(t *testing.T) {
 func TestWebhookAuthz_WrongEvent(t *testing.T) {
 	secret := []byte("testsecret")
 	allowed := parseAllowedOwners("itsaam")
-	h := githubWebhookHandler(nil, secret, nil, nil, allowed)
+	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr")
 
 	body := []byte(`{}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(body))

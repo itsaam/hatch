@@ -63,6 +63,9 @@ func main() {
 	}
 	hatchNetwork := getenv("HATCH_NETWORK", "hatch_public")
 	hatchDomain := getenv("HATCH_DOMAIN", "localhost")
+	// Bot handle used to detect @mentions in PR comments (issue_comment
+	// webhook). Defaults to the public app slug.
+	botHandle := getenv("HATCH_BOT_HANDLE", "hatchpr")
 	port := getenv("PORT", "8080")
 	ttlHours := getenvInt("PREVIEW_TTL_HOURS", 168)
 	reaperMinutes := getenvInt("PREVIEW_REAPER_INTERVAL_MINUTES", 60)
@@ -150,7 +153,7 @@ func main() {
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
-	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners))
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners, botHandle))
 
 	// Secret store — gated by HATCH_ADMIN_TOKEN (bearer). See secrets_handlers.go.
 	r.Route("/api/secrets", func(r chi.Router) {

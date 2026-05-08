@@ -102,6 +102,11 @@ type lockEntry struct {
 // falls back to unauthenticated GitHub raw fetches (public repos only).
 func (d *Deployer) SetAppClient(app *AppClient) { d.app = app }
 
+// HTTPExt exposes the deployer's external HTTP client (used for GitHub
+// contents/files fetches). Reused by the webhook handler so we share the
+// same connection pool / timeout settings.
+func (d *Deployer) HTTPExt() *http.Client { return d.httpExt }
+
 func NewDeployer(pool *pgxpool.Pool, netName, domain string, maxConcurrent int) (*Deployer, error) {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
