@@ -183,6 +183,12 @@ def handle_client(client):
         # Connect upstream and forward request as-is
         upstream = socket.create_connection((UPSTREAM_HOST, UPSTREAM_PORT), timeout=120)
         upstream.sendall(head_raw + b"\r\n\r\n" + body)
+        # Drop timeouts once the request is sent: the relay phase is a
+        # bidirectional stream driven by the peers (long docker build / exec /
+        # session can have multi-minute silent stretches). A socket timeout
+        # here would EOF the stream mid-build.
+        upstream.settimeout(None)
+        client.settimeout(None)
 
         # For hijacked / streaming endpoints, do bidirectional relay
         # Easier: always do bidirectional relay after sending request.
