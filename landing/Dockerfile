@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /src
 ARG VITE_API_URL=https://api.hatchpr.dev
 ENV VITE_API_URL=$VITE_API_URL
@@ -7,7 +7,7 @@ RUN npm ci --legacy-peer-deps
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine
+FROM nginx:stable-alpine
 COPY --from=build /src/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
