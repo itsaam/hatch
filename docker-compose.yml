@@ -1,6 +1,7 @@
 services:
   hatch-postgres:
     image: postgres:16-alpine
+    stop_grace_period: 2m
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
