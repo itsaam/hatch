@@ -221,6 +221,21 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 				// fall through to the deploy path
 			}
 
+			if deployer.kube != nil {
+				if err := deployer.queueKubeWebhook(ctx, ref, true); err != nil {
+					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
+					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				if app != nil && ref.InstallationID != 0 {
+					if err := ensurePRComment(ctx, pool, app, ev); err != nil {
+						log.Printf("ensure pr comment %s#%d: %v", ref.Repo, ref.PR, err)
+					}
+				}
+				writeOK(w)
+				return
+			}
+
 			if err := handlePullRequest(ctx, pool, app, ev); err != nil {
 				log.Printf("handle pull_request: %v", err)
 				http.Error(w, "internal", http.StatusInternalServerError)
@@ -235,6 +250,15 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			}
 
 		case "closed":
+			if deployer.kube != nil {
+				if err := deployer.queueKubeWebhook(ctx, ref, false); err != nil {
+					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
+					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				writeOK(w)
+				return
+			}
 			if err := handlePullRequest(ctx, pool, app, ev); err != nil {
 				log.Printf("handle pull_request: %v", err)
 				http.Error(w, "internal", http.StatusInternalServerError)
@@ -326,16 +350,7 @@ func handlePullRequest(ctx context.Context, pool *pgxpool.Pool, app *AppClient, 
 
 	switch ev.Action {
 	case "opened", "reopened", "synchronize":
-		_, err := pool.Exec(ctx, `
-			INSERT INTO previews (repo_full_name, pr_number, branch, commit_sha, status, installation_id)
-			VALUES ($1, $2, $3, $4, 'pending', $5)
-			ON CONFLICT (repo_full_name, pr_number) DO UPDATE
-			SET branch = EXCLUDED.branch,
-			    commit_sha = EXCLUDED.commit_sha,
-			    status = 'pending',
-			    installation_id = EXCLUDED.installation_id,
-			    updated_at = NOW()
-		`, repo, pr, branch, sha, nullableInt64(installationID))
+		_, err := pool.Exec(ctx, upsertPendingPreviewSQL, repo, pr, branch, sha, nullableInt64(installationID))
 		if err != nil {
 			return err
 		}

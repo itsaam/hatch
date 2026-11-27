@@ -24,15 +24,44 @@ type kubeOperation struct {
 func (d *Deployer) enqueueKubeOperation(ref PreviewRef, operation string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := d.pool.Exec(ctx, `INSERT INTO kube_operations (repo_full_name, pr_number, operation)
-		SELECT repo_full_name, pr_number, $3 FROM previews WHERE repo_full_name=$1 AND pr_number=$2
-		AND ($3 <> 'deploy' OR commit_sha=$4)
-		ON CONFLICT (repo_full_name, pr_number) DO UPDATE
-		SET id=EXCLUDED.id, operation=EXCLUDED.operation, available_at=NOW(), expiry_days=0`, ref.Repo, ref.PR, operation, ref.SHA)
+	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		var sha string
+		if err := tx.QueryRow(ctx, `SELECT commit_sha FROM previews WHERE repo_full_name=$1 AND pr_number=$2 FOR UPDATE`, ref.Repo, ref.PR).Scan(&sha); err != nil {
+			return err
+		}
+		if sha != ref.SHA {
+			return errors.New("preview changed before the operation was queued")
+		}
+		return enqueueKubeTx(ctx, tx, ref, operation)
+	})
 	if err != nil {
 		log.Printf("queue Kubernetes %s %s#%d: %v", operation, ref.Repo, ref.PR, err)
 	}
 	return err == nil
+}
+
+func enqueueKubeTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, operation string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO kube_operations (repo_full_name, pr_number, operation)
+		VALUES ($1, $2, $3) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
+		SET id=EXCLUDED.id, operation=EXCLUDED.operation, available_at=NOW(), expiry_days=0`, ref.Repo, ref.PR, operation)
+	return err
+}
+
+func (d *Deployer) queueKubeWebhook(ctx context.Context, ref PreviewRef, deploy bool) error {
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		if deploy {
+			if _, err := tx.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID)); err != nil {
+				return err
+			}
+			return enqueueKubeTx(ctx, tx, ref, "deploy")
+		}
+		tag, err := tx.Exec(ctx, `UPDATE previews SET status='closed', updated_at=NOW()
+			WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		return enqueueKubeTx(ctx, tx, ref, "close")
+	})
 }
 
 func (d *Deployer) enqueueKubeExpiry(ctx context.Context, ref PreviewRef, days int) error {
@@ -223,7 +252,12 @@ func (d *Deployer) updateKubeStatus(ctx context.Context, job kubeOperation, stat
 
 func (d *Deployer) completeKubeOperation(ctx context.Context, job kubeOperation, status, publicURL string) {
 	ref := job.ref
+	var applied bool
 	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		var sha string
+		if err := tx.QueryRow(ctx, `SELECT commit_sha FROM previews WHERE repo_full_name=$1 AND pr_number=$2 FOR UPDATE`, ref.Repo, ref.PR).Scan(&sha); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `DELETE FROM kube_operations WHERE id=$1`, job.id)
 		if err != nil {
 			return err
@@ -231,12 +265,17 @@ func (d *Deployer) completeKubeOperation(ctx context.Context, job kubeOperation,
 		if tag.RowsAffected() == 0 {
 			return pgx.ErrNoRows
 		}
+		if sha != ref.SHA {
+			return nil
+		}
 		if job.kind == "delete" {
-			_, err = tx.Exec(ctx, `DELETE FROM previews WHERE repo_full_name=$1 AND pr_number=$2 AND updated_at=$3`, ref.Repo, ref.PR, job.updatedAt)
+			tag, err = tx.Exec(ctx, `DELETE FROM previews WHERE repo_full_name=$1 AND pr_number=$2 AND updated_at=$3`, ref.Repo, ref.PR, job.updatedAt)
+			applied = tag.RowsAffected() > 0
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE previews SET status=$1, url=NULLIF($2,''), updated_at=NOW()
+		tag, err = tx.Exec(ctx, `UPDATE previews SET status=$1, url=NULLIF($2,''), updated_at=NOW()
 			WHERE repo_full_name=$3 AND pr_number=$4 AND commit_sha=$5`, status, publicURL, ref.Repo, ref.PR, ref.SHA)
+		applied = tag.RowsAffected() > 0
 		return err
 	})
 	if err != nil {
@@ -246,11 +285,17 @@ func (d *Deployer) completeKubeOperation(ctx context.Context, job kubeOperation,
 		}
 		return
 	}
+	if !applied {
+		return
+	}
 	if job.kind == "expire" {
 		if notifier, ok := d.notifier.(hibernateNotifier); ok && ref.InstallationID != 0 && ref.CommentID != 0 {
 			notifier.OnHibernated(ctx, ref, job.expiryDays)
 		}
 		return
+	}
+	if ref.CommentID == 0 && ref.InstallationID != 0 {
+		ref.CommentID = loadCommentID(ctx, d.pool, ref.Repo, ref.PR)
 	}
 	d.notifier.OnStatusChange(ctx, ref, status, publicURL)
 }

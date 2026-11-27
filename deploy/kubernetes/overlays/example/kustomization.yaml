@@ -8,6 +8,7 @@ configMapGenerator:
     behavior: merge
     literals:
       - ALLOWED_ORIGIN=https://hatch.example.org
+      - HATCH_PUBLIC_API_URL=https://api.hatch.example.org
       - HATCH_DOMAIN=hatch.example.org
       - HATCH_ALLOWED_OWNERS=example-org
       - HATCH_REGISTRY_PREFIX=ghcr.io/example-org/hatch-previews

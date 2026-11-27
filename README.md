@@ -87,7 +87,7 @@ Chaque preview occupe un namespace préprovisionné, avec ses quotas et ses règ
 
 Pour migrer depuis Docker Compose :
 
-1. Sauvegarder PostgreSQL et vérifier la restauration dans la base cible. Récupérer la clé `HATCH_SECRET_KEY` utilisée pour chiffrer les secrets de dépôt, ainsi que la configuration de la GitHub App, via le gestionnaire de secrets. Si l'ancienne instance utilisait le secret webhook comme clé de secours, conserver cette valeur pour déchiffrer les données restaurées.
+1. Sauvegarder PostgreSQL et vérifier sa restauration. Récupérer `HATCH_SECRET_KEY` et la configuration de la GitHub App via le gestionnaire de secrets. Si l'ancienne instance dérivait la clé du secret webhook, définir `HATCH_SECRET_KEY` sur `hatch-fallback:` suivi de l'ancien secret webhook. Vérifier le déchiffrement des secrets de dépôt avant la bascule.
 2. Valider sur un environnement de test le cycle complet d'une PR, dont le build, le démarrage des dépendances, le seed, la route HTTPS, les logs, la mise à jour GitHub et le nettoyage à la fermeture. Vérifier aussi le traitement des anciens états de preview en base lors du changement de moteur.
 3. Vérifier que l'ancienne instance est arrêtée et effectuer la bascule du routage du site, de l'API et des previews avant de rediriger le webhook GitHub. Garder le volume Compose et la configuration d'origine pour le retour arrière, puis décider comment réconcilier les écritures faites sur la base cible si ce retour est nécessaire.
 

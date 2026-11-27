@@ -38,7 +38,7 @@ func TestKubeClusterPreview(t *testing.T) {
 				Healthcheck: &ComposeHealthcheck{Cmd: "pg_isready -h 127.0.0.1 -U hatch -d hatch", IntervalSeconds: 2, Retries: 10},
 			},
 			"web": {Image: "nginx:alpine", Port: 80, Expose: true, DependsOn: []string{"db"},
-				Healthcheck: &ComposeHealthcheck{Cmd: "nslookup db >/dev/null && wget -q -O /dev/null http://127.0.0.1/", IntervalSeconds: 2, Retries: 10}},
+				Healthcheck: &ComposeHealthcheck{Cmd: "nc -z -w 3 db 5432 && wget -q -O /dev/null http://127.0.0.1/", IntervalSeconds: 2, Retries: 10}},
 		},
 		Seed: &ComposeSeed{After: "db", SQL: "seed.sql"},
 	}
@@ -52,6 +52,13 @@ func TestKubeClusterPreview(t *testing.T) {
 	}
 	if ok, err := kube.exists(ctx, ref); err != nil || !ok {
 		t.Fatalf("deployed preview missing: %t, %v", ok, err)
+	}
+	slots, _, err := kube.locate(ctx, ref)
+	if err != nil || len(slots) != 1 {
+		t.Fatalf("expected the one fixture slot, got %d: %v", len(slots), err)
+	}
+	if err := kube.waitSeedJob(ctx, slots[0]); err != nil {
+		t.Fatalf("seed job failed: %v", err)
 	}
 
 	client := &http.Client{Timeout: 3 * time.Second}

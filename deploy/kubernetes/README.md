@@ -45,9 +45,9 @@ BuildKit separately for concurrent builds.
    overlay's `images` field. The base uses the mutable `edge` tag. The landing
    image embeds `VITE_API_URL` at build time. The upstream image defaults to
    `https://api.hatchpr.dev`. For a different API hostname, build the landing
-   Dockerfile with the corresponding `VITE_API_URL` and set the `hatch-api-base`
-   meta tag in the static dashboard page. For GHCR builds in this repository,
-   set the `HATCH_LANDING_API_URL` Actions variable.
+   Dockerfile with the corresponding `VITE_API_URL` and set `HATCH_PUBLIC_API_URL`
+   in the overlay for the dashboard. For GHCR builds in this repository, set the
+   `HATCH_LANDING_API_URL` Actions variable.
 
 ## Preview compatibility
 
@@ -57,6 +57,8 @@ are skipped. Repositories, build contexts, and Dockerfiles are fetched at the
 PR commit, with `dockerfile` relative to `build`. Kubernetes builds consume a
 GitHub archive and require a Dockerfile that builds from that archive. Set an
 explicit `port` if the Dockerfile relies on variable or inherited `EXPOSE`.
+`HATCH_BUILD_SECRETS` applies to the Docker runtime. Dockerfiles that require
+these secret mounts need to be adapted before they can run on Kubernetes.
 Set up retention in the preview registry for pushed image tags and cached layers.
 
 ## Public HTTPS without Dokploy
@@ -107,7 +109,10 @@ kubectl -n hatch-system create secret generic hatch-buildkit-tls \
 The API's `DATABASE_URL` uses the PostgreSQL credentials, with URL-escaped
 credentials as needed, and the host `hatch-postgres:5432`. For example, use
 `postgres://USER:PASSWORD@hatch-postgres:5432/DB?sslmode=disable` within the cluster.
-Keep the encryption key stable when rotating the GitHub webhook secret. Use
+Keep the encryption key stable when rotating the GitHub webhook secret. Set
+`hatch-fallback:<old webhook secret>` as the value of `HATCH_SECRET_KEY` when
+the previous system used the webhook-derived fallback. Verify decryption with
+restored data before exposing production traffic. Use
 Secrets of type `kubernetes.io/tls` for Ingress TLS and
 `kubernetes.io/dockerconfigjson` for the registry and pull credentials.
 Supply preview TLS through the ingress controller's default wildcard certificate
@@ -150,6 +155,19 @@ and provision the optional TLS and pull Secrets before it receives a preview.
 The template binds the `hatch-system/hatch-api` service account to a Role in
 each slot. The Role covers preview resources and pod logs. The API service
 account has no cluster-wide role.
+
+## Recover a reserved slot after an interrupted Kubernetes API write
+
+Hatch records in-progress writes in `hatch-pending.*` or `hatch-seed-pending.*`
+ConfigMaps. An abrupt coordinator failure or an ambiguous Kubernetes response
+can leave a slot reserved when Hatch cannot establish whether a write happened.
+Pause the API by scaling it to zero in the desired Git configuration. Use
+Kubernetes API diagnostics to confirm the old create is no longer in flight,
+then inspect the claim, marker and named resource in that slot. If the named
+object exists under the claim, let Hatch reconcile it when the API resumes. If
+the create definitively did not happen, remove only the reviewed pending marker,
+then resume the API so it can clean up the slot. If the outcome is still unclear,
+keep the slot reserved and use another namespace until it is resolved.
 
 ## Image workflow
 

@@ -49,9 +49,16 @@ func (k *kubeRuntime) seedPostgres(ctx context.Context, slot *kubeSlot, plan kub
 	security["readOnlyRootFilesystem"] = true
 	container := kubeFields{
 		"name": "psql", "image": "postgres:17-alpine", "imagePullPolicy": "Always",
-		"command": []string{"psql"},
-		"args":    []string{"--no-psqlrc", "--no-password", "--set=ON_ERROR_STOP=1", "--file=/seed/seed.sql"},
-		"env":     env, "resources": kubeResources(250, 128<<20), "securityContext": security,
+		"command": []string{"sh", "-ec"},
+		"args": []string{`for i in $(seq 1 20); do
+  if pg_isready -q -t 2; then
+    exec psql --no-psqlrc --no-password --set=ON_ERROR_STOP=1 --file=/seed/seed.sql
+  fi
+  sleep 2
+done
+echo 'PostgreSQL service did not accept connections' >&2
+exit 1`},
+		"env": env, "resources": kubeResources(250, 128<<20), "securityContext": security,
 		"volumeMounts": []kubeFields{{"name": "seed-sql", "mountPath": "/seed", "readOnly": true}},
 	}
 	pod := k.podSpec(container)

@@ -155,7 +155,13 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		}
 		// Track the preview as pending and (re)post the sticky comment so the
 		// deployer's notifier has a comment id to update.
-		if err := upsertPendingPreview(ctx, pool, ref); err != nil {
+		var err error
+		if deployer.kube != nil {
+			err = deployer.queueKubeWebhook(ctx, ref, true)
+		} else {
+			_, err = pool.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID))
+		}
+		if err != nil {
 			log.Printf("issue_comment: upsert %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
@@ -167,7 +173,7 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 			log.Printf("issue_comment: sticky comment %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
 		}
 		ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
-		if !deployer.DeployAsync(ref) {
+		if deployer.kube == nil && !deployer.DeployAsync(ref) {
 			http.Error(w, "deploy queue full", http.StatusServiceUnavailable)
 			return
 		}
@@ -179,11 +185,11 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 			return
 		}
 		ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
-		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
 		if !deployer.DestroyAsync(ref) {
 			http.Error(w, "destroy queue full", http.StatusServiceUnavailable)
 			return
 		}
+		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
 	}
 	writeOK(w)
 }
@@ -200,10 +206,7 @@ func commenterAuthorized(ctx context.Context, app *AppClient, installID int64, o
 	return app.IsCollaborator(ctx, installID, owner, repo, commenter)
 }
 
-// upsertPendingPreview is the equivalent of handlePullRequest's INSERT used
-// by the issue_comment path, where we don't have a prEvent payload.
-func upsertPendingPreview(ctx context.Context, pool *pgxpool.Pool, ref PreviewRef) error {
-	_, err := pool.Exec(ctx, `
+const upsertPendingPreviewSQL = `
 		INSERT INTO previews (repo_full_name, pr_number, branch, commit_sha, status, installation_id)
 		VALUES ($1, $2, $3, $4, 'pending', $5)
 		ON CONFLICT (repo_full_name, pr_number) DO UPDATE
@@ -212,9 +215,7 @@ func upsertPendingPreview(ctx context.Context, pool *pgxpool.Pool, ref PreviewRe
 		    status = 'pending',
 		    installation_id = EXCLUDED.installation_id,
 		    updated_at = NOW()
-	`, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID))
-	return err
-}
+	`
 
 // ensureMentionStickyComment creates the "hatching" sticky comment when one
 // does not yet exist for this PR. Mirrors ensurePRComment but does not need

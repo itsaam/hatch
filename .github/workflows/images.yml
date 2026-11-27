@@ -64,6 +64,24 @@ jobs:
         with:
           context: ${{ matrix.context }}
           push: false
+          load: true
+          tags: hatch-${{ matrix.workload }}:test
+      - name: Verify the BuildKit client in the API image
+        if: matrix.workload == 'api'
+        run: docker run --rm --entrypoint /usr/bin/buildctl hatch-api:test --version
+      - name: Verify the dashboard uses the configured API
+        if: matrix.workload == 'landing'
+        run: |
+          container=$(docker run -d -e HATCH_PUBLIC_API_URL=https://api.hatch.example hatch-landing:test)
+          trap 'docker rm -f "$container"' EXIT
+          for _ in $(seq 1 20); do
+            if docker exec "$container" wget -qO- http://127.0.0.1/app/ | grep -F '<meta name="hatch-api-base" content="https://api.hatch.example">'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$container"
+          exit 1
 
   publish:
     name: Publish ${{ matrix.workload }}

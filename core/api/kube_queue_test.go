@@ -97,4 +97,26 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT status,url FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&state, &publicURL); err != nil || state != "running" || publicURL != url {
 		t.Fatalf("preview state = %q, %q, %v", state, publicURL, err)
 	}
+	if err := d.queueKubeWebhook(ctx, ref, false); err != nil {
+		t.Fatal(err)
+	}
+	closing, err := d.claimKubeOperation(ctx)
+	if err != nil || closing.kind != "close" {
+		t.Fatalf("close claim = %+v, %v", closing, err)
+	}
+	if err := d.queueKubeWebhook(ctx, ref, true); err != nil {
+		t.Fatal(err)
+	}
+	d.completeKubeOperation(ctx, closing, "closed", "")
+	reopened, err := d.claimKubeOperation(ctx)
+	if err != nil || reopened.kind != "deploy" || reopened.id == closing.id {
+		t.Fatalf("reopen with same SHA = %+v, %v", reopened, err)
+	}
+	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
+	if err := d.queueKubeWebhook(ctx, ref, false); err == nil {
+		t.Fatal("expected the queue write to fail")
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&state); err != nil || state != "pending" {
+		t.Fatalf("failed enqueue changed the preview state to %q, %v", state, err)
+	}
 }

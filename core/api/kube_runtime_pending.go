@@ -22,6 +22,13 @@ func (s *kubeSlot) pendingName(prefix string) string {
 // Persist the intent before dispatching the resource create. A timed-out
 // request can still complete after a retry or a coordinator restart.
 func (k *kubeRuntime) createOwned(ctx context.Context, slot *kubeSlot, resource kubeResource, name string, object kubeFields, pendingName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Finish the bounded write sequence during a graceful shutdown once the
+	// intent may exist. Hard termination can still leave a marker for review.
+	writeCtx, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	defer cancelWrite()
 	pendingName = slot.pendingName(pendingName)
 	data := map[string]string{"resource": string(resource), "name": name}
 	marker := kubeObject("v1", "ConfigMap", slot.metadata(pendingName, slot.labels()), "data", data)
@@ -29,14 +36,14 @@ func (k *kubeRuntime) createOwned(ctx context.Context, slot *kubeSlot, resource 
 	path := kubeConfigMaps.path(slot.namespace, pendingName)
 
 	var pending kubeClaim
-	if err := k.client.json(ctx, http.MethodPost, kubeConfigMaps.path(slot.namespace), marker, &pending); err != nil {
+	if err := k.client.json(writeCtx, http.MethodPost, kubeConfigMaps.path(slot.namespace), marker, &pending); err != nil {
 		return err
 	}
 	if !validKubePending(slot, pending, pendingName) || pending.Data["resource"] != string(resource) || pending.Data["name"] != name {
 		return errors.New("could not verify the kubernetes pending create")
 	}
 
-	err := k.client.json(ctx, http.MethodPost, resource.path(slot.namespace), object, nil)
+	err := k.client.json(writeCtx, http.MethodPost, resource.path(slot.namespace), object, nil)
 	var uncertain *kubeUncertainCreate
 	if errors.As(err, &uncertain) {
 		return err

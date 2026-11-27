@@ -369,6 +369,36 @@ func TestKubeRuntimeKeepsClaimAfterUnknownCreate(t *testing.T) {
 	}
 }
 
+func TestKubeRuntimeDrainsCreateAfterSavingIntent(t *testing.T) {
+	runtime, api := newKubeTestRuntime(t)
+	ref := PreviewRef{Repo: "acme/one", PR: 1, SHA: "revision"}
+	slot, err := runtime.claimSlot(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runtime.client.http.Transport = kubeTestTransport(func(req *http.Request) (*http.Response, error) {
+		if err := req.Context().Err(); err != nil {
+			return nil, err
+		}
+		res, err := api.serve(req)
+		if req.Method == http.MethodPost && req.URL.Path == kubeConfigMaps.path(slot.namespace) {
+			cancel()
+		}
+		return res, err
+	})
+	if err := runtime.createSecret(ctx, slot, "fixture", map[string][]byte{"key": []byte("value")}, kubePendingName); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := api.objects[kubeConfigMaps.path(slot.namespace, slot.pendingName(kubePendingName))]; ok {
+		t.Fatal("graceful cancellation left the slot's write marker behind")
+	}
+	if err := runtime.destroy(t.Context(), ref); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestKubeImageReference(t *testing.T) {
 	for _, image := range []string{
 		"postgres:16-alpine", "docker.io/library/redis", "localhost:5000/a_b/web:dev",

@@ -12,6 +12,7 @@ configMapGenerator:
     literals:
       - PORT=8080
       - ALLOWED_ORIGIN=https://hatch.example.com
+      - HATCH_PUBLIC_API_URL=https://api.hatch.example.com
       - GITHUB_APP_ENABLED=true
       - GITHUB_APP_PRIVATE_KEY_PATH=/var/run/hatch/github/github-app.pem
       - HATCH_DOMAIN=hatch.example.com
