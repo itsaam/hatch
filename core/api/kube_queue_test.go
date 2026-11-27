@@ -226,13 +226,29 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if latest := mustClaim("deploy"); latest.ref.SHA != newHead.SHA {
 		t.Fatalf("concurrent observations queued the wrong head: %+v", latest)
 	}
+	if err := d.storeKubeWebhook(ctx, newHead, kubePullChanged); err != nil {
+		t.Fatal(err)
+	}
+	configurationFailure := errors.New("temporary config read failure")
+	if worked, err := d.processKubeWebhook(ctx, commandlessReader(t), func(context.Context, PreviewRef) (bool, error) {
+		return false, configurationFailure
+	}); !worked || !errors.Is(err, configurationFailure) {
+		t.Fatalf("configuration failure was not retried: worked=%v, err=%v", worked, err)
+	}
+	mustExec(pool, `UPDATE kube_github_deliveries SET available_at=NOW()`)
+	if worked, err := d.processKubeWebhook(ctx, commandlessReader(t), func(context.Context, PreviewRef) (bool, error) {
+		return false, nil
+	}); !worked || err != nil {
+		t.Fatalf("manual configuration was not ignored: worked=%v, err=%v", worked, err)
+	}
 	if err := d.storeKubeWebhook(ctx, newHead, kubePullClosed); err != nil {
 		t.Fatal(err)
 	}
+	autoAllowed := func(context.Context, PreviewRef) (bool, error) { return true, nil }
 	apiFailure := errors.New("temporarily unavailable")
 	if worked, err := d.processKubeWebhook(ctx, func(context.Context, PreviewRef) (*pullState, error) {
 		return nil, apiFailure
-	}); !worked || !errors.Is(err, apiFailure) {
+	}, autoAllowed); !worked || !errors.Is(err, apiFailure) {
 		t.Fatalf("failed observation: worked=%v, err=%v", worked, err)
 	}
 	makeDeliveryReady := func() {
@@ -240,14 +256,20 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		mustExec(pool, `UPDATE kube_github_deliveries SET available_at=NOW()`)
 	}
 	makeDeliveryReady()
-	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "open"))); !worked || err != nil {
+	mustExec(pool, `UPDATE kube_github_deliveries SET mismatches=5`)
+	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "open")), autoAllowed); !worked || err != nil {
 		t.Fatalf("inconclusive observation: worked=%v, err=%v", worked, err)
 	}
 	makeDeliveryReady()
-	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "closed"))); !worked || err != nil {
+	if worked, err := d.processKubeWebhook(ctx, func(ctx context.Context, _ PreviewRef) (*pullState, error) {
+		return fixturePull(newHead, "closed"), d.storeKubeWebhook(ctx, newHead, kubePullClosed)
+	}, autoAllowed); !worked || err != nil {
 		t.Fatalf("closure retry: worked=%v, err=%v", worked, err)
 	}
 	mustClaim("close")
+	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "closed")), autoAllowed); !worked || err != nil {
+		t.Fatalf("replacement signal was lost during processing: worked=%v, err=%v", worked, err)
+	}
 
 	commandReader := reader(fixturePull(newHead, "open"))
 	if queued, err := d.queueKubePullRequest(ctx, newHead, kubePullRedeploy, 125, commandReader); !queued || err != nil {
@@ -282,4 +304,11 @@ func fixturePull(ref PreviewRef, state string) *pullState {
 	pr := &pullState{State: state}
 	pr.Head.SHA, pr.Head.Ref, pr.Head.Repo.FullName = ref.SHA, ref.Branch, ref.Repo
 	return pr
+}
+
+func commandlessReader(t *testing.T) pullStateReader {
+	return func(context.Context, PreviewRef) (*pullState, error) {
+		t.Fatal("the manual preview policy reached the GitHub state observer")
+		return nil, nil
+	}
 }

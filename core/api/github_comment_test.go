@@ -67,11 +67,11 @@ func TestParseMention(t *testing.T) {
 			wantHit: false,
 		},
 		{
-			name:    "mention with leading text",
+			name:    "prose containing the preview command is ignored",
 			body:    "Please @hatchpr preview this!",
 			bot:     "hatchpr",
-			want:    verbDeploy,
-			wantHit: true,
+			want:    verbNone,
+			wantHit: false,
 		},
 		{
 			name:    "unknown verb is ignored",

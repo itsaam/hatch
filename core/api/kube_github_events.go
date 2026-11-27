@@ -94,9 +94,9 @@ func lockKubeGitHubPR(ctx context.Context, tx pgx.Tx, ref *PreviewRef) error {
 		return err
 	}
 	// Reuse the existing spelling so case-only renames cannot claim a second
-	// slot for the same public host. New rows use GitHub's case-insensitive key.
+	// slot. Preserve GitHub's spelling for new rows and existing secret keys.
 	return tx.QueryRow(ctx, `SELECT COALESCE((SELECT repo_full_name FROM previews
-		WHERE lower(repo_full_name)=lower($1) AND pr_number=$2 ORDER BY id LIMIT 1), lower($1))`, ref.Repo, ref.PR).Scan(&ref.Repo)
+		WHERE lower(repo_full_name)=lower($1) AND pr_number=$2 ORDER BY id LIMIT 1), $1)`, ref.Repo, ref.PR).Scan(&ref.Repo)
 }
 
 func queueKubePreviewTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, deploy bool) error {
@@ -154,7 +154,9 @@ func (d *Deployer) storeKubeWebhook(ctx context.Context, ref PreviewRef, intent 
 	}
 	_, err := d.pool.Exec(ctx, `INSERT INTO kube_github_deliveries
 		(repo_full_name, pr_number, installation_id, commit_sha, closed)
-		VALUES (lower($1),$2,$3,$4,$5) ON CONFLICT DO NOTHING`, ref.Repo, ref.PR, ref.InstallationID, ref.SHA, intent == kubePullClosed)
+		VALUES ($1,$2,$3,$4,$5) ON CONFLICT (repo_full_name, pr_number, commit_sha, closed) DO UPDATE
+		SET id=EXCLUDED.id, installation_id=EXCLUDED.installation_id, available_at=NOW(), mismatches=0`,
+		ref.Repo, ref.PR, ref.InstallationID, ref.SHA, intent == kubePullClosed)
 	return err
 }
 
@@ -162,7 +164,7 @@ func (d *Deployer) runKubeWebhookWorker(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
-		worked, err := d.processKubeWebhook(ctx, d.githubPullState)
+		worked, err := d.processKubeWebhook(ctx, d.githubPullState, d.kubeAutoBuildAllowed)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("process Kubernetes GitHub delivery: %v", err)
 		}
@@ -177,7 +179,12 @@ func (d *Deployer) runKubeWebhookWorker(ctx context.Context) {
 	}
 }
 
-func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader) (bool, error) {
+func (d *Deployer) kubeAutoBuildAllowed(ctx context.Context, ref PreviewRef) (bool, error) {
+	decision, err := automaticPreviewTrigger(ctx, d.httpExt, d.app, ref)
+	return decision == decisionBuild, err
+}
+
+func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader, autoAllowed func(context.Context, PreviewRef) (bool, error)) (bool, error) {
 	var id int64
 	var mismatches int16
 	var ref PreviewRef
@@ -202,13 +209,27 @@ func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader)
 	}
 	attempt, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
+	if !closed {
+		allowed, err := autoAllowed(attempt, ref)
+		if err != nil {
+			return true, err
+		}
+		if !allowed {
+			_, err := d.pool.Exec(ctx, `DELETE FROM kube_github_deliveries WHERE id=$1`, id)
+			return true, err
+		}
+	}
 	_, err = d.queueKubePullRequest(attempt, ref, intent, 0, read)
 	if errors.Is(err, errAwaitingGitHub) {
-		// A valid but different snapshot can be a delayed delivery or a stale
-		// GitHub read. Retry briefly, then keep the canonical newer state.
-		if mismatches < 4 {
+		// An old head can be superseded. A closure remains pending until the
+		// canonical state confirms it, with a slower cadence after rapid retries.
+		if mismatches < 4 || closed {
+			delay := 5
+			if mismatches >= 4 {
+				delay = 120
+			}
 			_, err = d.pool.Exec(ctx, `UPDATE kube_github_deliveries
-				SET mismatches=mismatches+1, available_at=NOW() + interval '5 seconds' WHERE id=$1`, id)
+				SET mismatches=least(mismatches+1,5), available_at=NOW() + ($2::integer * interval '1 second') WHERE id=$1`, id, delay)
 			return true, err
 		}
 		err = nil

@@ -191,6 +191,16 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
+			if deployer.kube != nil {
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged); err != nil {
+					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
+					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				writeOK(w)
+				return
+			}
+
 			switch decidePullRequestTrigger(ctx, deployer.HTTPExt(), app, ev) {
 			case decisionSkipMention:
 				log.Printf("preview skip (mention mode): %s#%d", ev.Repository.FullName, ev.Number)
@@ -219,16 +229,6 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 				return
 			case decisionBuild:
 				// fall through to the deploy path
-			}
-
-			if deployer.kube != nil {
-				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged); err != nil {
-					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
-					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
-					return
-				}
-				writeOK(w)
-				return
 			}
 
 			if err := handlePullRequest(ctx, pool, app, ev); err != nil {
@@ -284,29 +284,37 @@ const (
 // decidePullRequestTrigger applies the .hatch.yml previews policy to the
 // incoming event. An unavailable configuration cannot authorize an automatic build.
 func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, ev prEvent) triggerDecision {
-	spec, _, err := loadComposeForRef(ctx, httpClient, app, ev.Installation.ID, ev.Repository.FullName, ev.PullRequest.Head.SHA)
+	ref := PreviewRef{Repo: ev.Repository.FullName, PR: ev.Number, SHA: ev.PullRequest.Head.SHA, InstallationID: ev.Installation.ID}
+	decision, err := automaticPreviewTrigger(ctx, httpClient, app, ref)
 	if err != nil {
-		log.Printf("decide trigger: load compose %s#%d: %v", ev.Repository.FullName, ev.Number, err)
+		log.Printf("decide trigger %s#%d: %v", ref.Repo, ref.PR, err)
 		return decisionSkipMention
+	}
+	return decision
+}
+
+func automaticPreviewTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, ref PreviewRef) (triggerDecision, error) {
+	spec, _, err := loadComposeForRef(ctx, httpClient, app, ref.InstallationID, ref.Repo, ref.SHA)
+	if err != nil {
+		return decisionSkipMention, err
 	}
 	cfg := EffectivePreviews(spec)
-
 	if cfg.Trigger != TriggerAuto {
-		return decisionSkipMention
+		return decisionSkipMention, nil
 	}
-
-	if cfg.SkipWhenOnly != nil && *cfg.SkipWhenOnly && app != nil && ev.Installation.ID != 0 {
-		owner, repo, ok := splitRepo(ev.Repository.FullName)
+	if cfg.SkipWhenOnly != nil && *cfg.SkipWhenOnly && app != nil && ref.InstallationID != 0 {
+		owner, repo, ok := splitRepo(ref.Repo)
 		if ok {
-			files, err := app.ListPRFiles(ctx, ev.Installation.ID, owner, repo, ev.Number)
+			files, err := app.ListPRFiles(ctx, ref.InstallationID, owner, repo, ref.PR)
 			if err != nil {
-				log.Printf("decide trigger: list pr files %s#%d: %v (defaulting to build)", ev.Repository.FullName, ev.Number, err)
-			} else if allFilesMatchSkip(files, cfg.SkipPaths) {
-				return decisionSkipDocs
+				return decisionSkipMention, err
+			}
+			if allFilesMatchSkip(files, cfg.SkipPaths) {
+				return decisionSkipDocs, nil
 			}
 		}
 	}
-	return decisionBuild
+	return decisionBuild, nil
 }
 
 // previewExists returns true when a preview row is already tracked for the

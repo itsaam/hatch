@@ -267,6 +267,10 @@ func parseMention(body, botHandle string) (commentVerb, bool) {
 	}
 	body = strings.ToLower(body)
 	handle := "@" + strings.ToLower(strings.TrimPrefix(botHandle, "@"))
+	command := strings.Fields(body)
+	if len(command) == 2 && command[0] == handle && command[1] == "preview" {
+		return verbDeploy, true
+	}
 	idx := strings.Index(body, handle)
 	if idx < 0 {
 		return verbNone, false
@@ -285,8 +289,6 @@ func parseMention(body, botHandle string) (commentVerb, bool) {
 		return verbNone, false
 	}
 	switch strings.Trim(words[0], ".,!?:;`*_-") {
-	case "preview":
-		return verbDeploy, true
 	case "delete", "destroy", "down", "kill", "stop":
 		return verbDestroy, true
 	default:
