@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+configMapGenerator:
+  - name: hatch-api-config
+    namespace: hatch-system
+    behavior: merge
+    literals:
+      - ALLOWED_ORIGIN=https://hatch.example.org
+      - HATCH_DOMAIN=hatch.example.org
+      - HATCH_ALLOWED_OWNERS=example-org
+      - HATCH_REGISTRY_PREFIX=ghcr.io/example-org/hatch-previews
+      - HATCH_KUBE_TLS_SECRET=hatch-preview-tls
+      - HATCH_KUBE_IMAGE_PULL_SECRET=hatch-preview-pull
+patches:
+  - path: ingress.yaml

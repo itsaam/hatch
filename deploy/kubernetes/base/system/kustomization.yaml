@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hatch-system
+resources:
+  - namespace.yaml
+  - api.yaml
+  - postgres.yaml
+  - landing.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: hatch-api-config
+    literals:
+      - PORT=8080
+      - ALLOWED_ORIGIN=https://hatch.example.com
+      - GITHUB_APP_ENABLED=true
+      - GITHUB_APP_PRIVATE_KEY_PATH=/var/run/hatch/github/github-app.pem
+      - HATCH_DOMAIN=hatch.example.com
+      - HATCH_ALLOWED_OWNERS=example-owner
+      - PREVIEW_TTL_HOURS=168
+      - PREVIEW_REAPER_INTERVAL_MINUTES=60
+      - HATCH_RUNTIME=kubernetes
+      - HATCH_KUBE_PREVIEW_NAMESPACES=hatch-preview-1,hatch-preview-2,hatch-preview-3,hatch-preview-4
+      - HATCH_KUBE_INGRESS_CLASS=nginx
+      - HATCH_BUILDKIT_ADDR=tcp://builder.example.net:1234
+      - HATCH_BUILDKIT_CA=/var/run/hatch/buildkit/ca.pem
+      - HATCH_BUILDKIT_CERT=/var/run/hatch/buildkit/cert.pem
+      - HATCH_BUILDKIT_KEY=/var/run/hatch/buildkit/key.pem
+      - HATCH_BUILDKIT_SERVER_NAME=builder.example.net
+      - HATCH_REGISTRY_PREFIX=ghcr.io/example-owner/hatch-previews
+      - HATCH_REGISTRY_CONFIG=/var/run/hatch/registry/config.json

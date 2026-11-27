@@ -1,0 +1,81 @@
+name: Workload images
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Compile ${{ matrix.workload }}
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - workload: api
+            context: ./core/api
+          - workload: landing
+            context: ./landing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+
+  publish:
+    name: Publish ${{ matrix.workload }}
+    if: github.event_name == 'push' && github.repository == 'itsaam/hatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - workload: api
+            context: ./core/api
+            image: ghcr.io/itsaam/hatch-api
+          - workload: landing
+            context: ./landing
+            image: ghcr.io/itsaam/hatch-landing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=sha,format=long
+            type=edge
+            type=ref,event=tag
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.workload == 'landing' && format('VITE_API_URL={0}', vars.HATCH_LANDING_API_URL || 'https://api.hatchpr.dev') || '' }}
