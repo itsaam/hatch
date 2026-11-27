@@ -2,18 +2,18 @@ import Section from '../components/Section.jsx'
 import RevealText from '../components/RevealText.jsx'
 
 const items = [
-  { n: '01', t: 'Cloner le repo', d: 'Pull, switch de branche, npm install, attendre.' },
-  { n: '02', t: 'Démarrer la stack', d: 'Postgres, Redis, le worker, les variables d\'env.' },
-  { n: '03', t: 'Espérer que ça marche', d: 'Une dépendance bizarre, un port pris, un .env manquant.' }
+  { n: '01', t: 'Clone the repository', d: 'Check out the branch and install its dependencies.' },
+  { n: '02', t: 'Start the stack', d: 'Start the database, cache and workers with the right environment variables.' },
+  { n: '03', t: 'Debug local setup', d: 'Resolve missing configuration, dependencies and port conflicts.' }
 ]
 
 export default function Problem() {
   return (
-    <Section id="problem" label="[01] LE PROBLÈME">
+    <Section id="problem" label="[01] THE PROBLEM">
       <RevealText as="h2" className="display" style={{
         fontSize: 'clamp(32px, 5vw, 64px)', maxWidth: 900, marginBottom: 80
       }}>
-        Pour tester une PR, il faut encore galérer.
+        Reviewing a PR can take a full local setup.
       </RevealText>
 
       <div style={{
@@ -35,7 +35,7 @@ export default function Problem() {
         marginTop: 100, fontSize: 'clamp(28px, 4vw, 52px)',
         fontWeight: 600, maxWidth: 1000, lineHeight: 1.1
       }}>
-        Le designer abandonne. Le PM valide à l'aveugle. Les bugs passent.
+        Everyone who needs to review the result has to repeat that setup.
       </RevealText>
     </Section>
   )

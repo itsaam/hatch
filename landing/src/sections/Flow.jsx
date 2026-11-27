@@ -6,13 +6,13 @@ import Section from '../components/Section.jsx'
 gsap.registerPlugin(ScrollTrigger)
 
 const lines = [
-  { t: '$ git push origin feature/wishlist', kind: 'cmd' },
-  { t: '→ Hatch reçoit le webhook GitHub', kind: 'log' },
-  { t: '→ Build l\'image Docker', kind: 'log' },
-  { t: '→ Spawn un container isolé', kind: 'log' },
-  { t: '→ Configure le routing wildcard', kind: 'log' },
-  { t: '🚀 Preview live : pr-42-althea.preview.tonsite.fr', kind: 'success' },
-  { t: '(merged) → cleanup automatique', kind: 'mute' }
+  { t: 'PR comment: @hatchpr preview', kind: 'cmd' },
+  { t: '→ Hatch validates the GitHub webhook', kind: 'log' },
+  { t: '→ Builds the application image', kind: 'log' },
+  { t: '→ Starts an isolated stack', kind: 'log' },
+  { t: '→ Configures the preview route', kind: 'log' },
+  { t: '→ Preview link posted on the PR', kind: 'success' },
+  { t: '(PR closed) → preview resources removed', kind: 'mute' }
 ]
 
 export default function Flow() {
@@ -33,11 +33,11 @@ export default function Flow() {
   }, [])
 
   return (
-    <Section id="flow" label="[04] LE FLUX">
+    <Section id="flow" label="[04] THE FLOW">
       <h2 className="display" style={{
         fontSize: 'clamp(32px, 5vw, 56px)', maxWidth: 800, marginBottom: 60, fontWeight: 700
       }}>
-        Du push au lien live, en moins d'une minute.
+        See what happens after you request a preview.
       </h2>
 
       <div ref={ref} style={{

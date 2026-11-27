@@ -4,16 +4,16 @@
 
 # Hatch
 
-Préviews auto-hébergées pour les pull requests GitHub. Chaque preview peut lancer son application, sa base de données et ses services associés dans un environnement isolé.
+Self-hosted previews for GitHub pull requests. Run the app, database, and supporting services together in a temporary environment.
 
-[Site](https://hatchpr.dev) · [Documentation](https://hatchpr.dev/docs/) · [GitHub App](https://github.com/apps/hatchpr) · [Dépôt de démo](https://github.com/itsaam/hatch-demo-node)
+[Website](https://hatchpr.dev) · [Documentation](https://hatchpr.dev/docs/) · [GitHub App](https://github.com/apps/hatchpr) · [Demo repository](https://github.com/itsaam/hatch-demo-node)
 
 </div>
 
-## Première preview
+## Request your first preview
 
-1. Installe la GitHub App sur un dépôt autorisé.
-2. Ajoute un `.hatch.yml` à la racine du dépôt.
+1. Install the GitHub App on a repository allowed by your Hatch instance.
+2. Add a root `Dockerfile` and `.hatch.yml`. Replace `3000` with your app's listening port.
 
    ```yaml
    version: 1
@@ -24,15 +24,15 @@ Préviews auto-hébergées pour les pull requests GitHub. Chaque preview peut la
        expose: true
    ```
 
-3. Ouvre une PR et écris `@hatchpr preview` seul dans un commentaire. Hatch publie le lien sur la PR.
+3. Open a PR and comment `@hatchpr preview` on its own. Hatch posts the preview link on the PR.
 
-Par défaut, répète la commande après un push pour mettre la preview à jour. Configure `previews.trigger: auto` si tu veux déclencher les builds à chaque mise à jour. Fermer la PR libère les ressources de la preview.
+Repeat the command after pushing a commit. To build automatically, set `previews.trigger: auto` explicitly. Closing the PR removes the preview and its temporary data.
 
-Le [dépôt de démo](https://github.com/itsaam/hatch-demo-node) montre un exemple avec Node et PostgreSQL. La [CLI](cli/README.md) peut générer un `.hatch.yml` pour ton projet.
+The [Node and PostgreSQL demo](https://github.com/itsaam/hatch-demo-node) shows a multi-service configuration. The [CLI](cli/README.md) can generate a starting configuration for your repository.
 
-## Déployer Hatch
+## Deploy Hatch
 
-- [Kubernetes et Argo CD](deploy/kubernetes/README.md) pour l’installation, le builder distant, les secrets et la bascule depuis Compose.
-- [Docker Compose](deploy/docker-compose.md) pour une installation sur un serveur Linux derrière Traefik. Voir aussi [la protection du socket Docker](security/README.md).
+- [Kubernetes and Argo CD](deploy/kubernetes/README.md) for a remote builder, registry and isolated preview namespaces.
+- [Docker Compose](deploy/docker-compose.md) for a Docker host behind Traefik. See [socket hardening](security/README.md) for the optional Docker API filter.
 
-Les bases de données des previews sont temporaires. Hatch est en bêta. [Signaler un problème](https://github.com/itsaam/hatch/issues) · [Licence](LICENSE)
+[Report an issue](https://github.com/itsaam/hatch/issues) · [License](LICENSE)

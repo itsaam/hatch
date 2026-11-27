@@ -1,8 +1,8 @@
-# Déployer Hatch avec Docker Compose
+# Deploy Hatch with Docker Compose
 
-Prépare un serveur Linux avec Docker et Traefik, par exemple via Dokploy. Fais
-pointer le domaine du site, celui de l’API et les sous-domaines de preview vers
-l’ingress du serveur. Le réseau Docker externe `dokploy-network` doit exister.
+Prepare a Linux server with Docker and Traefik. Dokploy is one way to run
+Traefik. The external Docker network `dokploy-network` must exist. Point the
+site, API and wildcard preview hostnames to the server's ingress.
 
 ```bash
 git clone https://github.com/itsaam/hatch /opt/hatch
@@ -10,21 +10,23 @@ cd /opt/hatch
 cp .env.example .env
 ```
 
-Renseigne les paramètres dans `.env`, dont les identifiants PostgreSQL,
-`HATCH_DOMAIN`, `ALLOWED_ORIGIN`, `HATCH_ALLOWED_OWNERS` et les secrets du
-webhook, du tableau de bord et du chiffrement. Place la clé de la GitHub App dans
-`/etc/hatch/secrets/github-app.pem` avec des permissions restreintes. Confirme que
-son webhook reçoit `pull_request` et `issue_comment`.
+Set the PostgreSQL credentials, `HATCH_DOMAIN`, `ALLOWED_ORIGIN` and
+`HATCH_ALLOWED_OWNERS` in `.env`. Configure `GITHUB_WEBHOOK_SECRET`,
+`HATCH_ADMIN_TOKEN` and a stable `HATCH_SECRET_KEY`. Set `GITHUB_APP_ID` and
+store the app's private key at `/etc/hatch/secrets/github-app.pem` with
+restricted permissions. Point the app webhook to the API's
+`/api/github/webhook` route and subscribe to `pull_request` and
+`issue_comment`.
 
-Pour conserver une limite par visiteur derrière Traefik, renseigne
-`HATCH_TRUSTED_PROXY_CIDRS` avec les réseaux des proxies qui contrôlent
-`X-Forwarded-For`. Garde les réseaux des conteneurs de preview hors de cette
-liste. Sans ce réglage, les visiteurs d’un même proxy partagent sa limite.
+Set `HATCH_TRUSTED_PROXY_CIDRS` to the networks of proxies that sanitize or
+append `X-Forwarded-For`. Leave preview networks out of this list. If you
+leave the setting empty, visitors through the same proxy share its rate
+limit.
 
-L’accès direct à `/var/run/docker.sock` donne à l’API la capacité d’administrer
-le serveur Docker. Le [guide de protection du socket](../security/README.md)
-décrit l’override Compose, le proxy d’API et le filtre des créations de
-conteneurs.
+Access to `/var/run/docker.sock` lets the API administer the Docker host.
+The [socket hardening guide](../security/README.md) documents the Compose
+override, API proxy and container creation filter.
 
-Une fois la configuration prête, lance `docker compose up -d`, puis vérifie
-`/readyz` et le cycle d’une PR avec `@hatchpr preview`.
+Once the configuration is ready, run `docker compose up -d`. Check
+`/readyz`, request a preview with `@hatchpr preview`, and close the test PR to
+verify cleanup.

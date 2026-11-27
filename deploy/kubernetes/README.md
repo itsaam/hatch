@@ -204,7 +204,8 @@ keep the slot reserved and use another namespace until it is resolved.
 
 ## Image workflow
 
-Pull requests compile the two workload images on GitHub-hosted runners. Pushes
+Pull requests compile the API and landing images on GitHub-hosted runners.
+Trivy reports vulnerabilities in both images without blocking on findings. Pushes
 to `main` or `v*` tags publish both images to GHCR with full `sha-<commit>` tags,
 plus `edge` for `main` or the Git tag for releases. Deployment is a separate
 manual operation.

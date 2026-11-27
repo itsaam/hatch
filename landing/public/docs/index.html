@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Docs — Hatch</title>
-<meta name="description" content="Documentation Hatch : configuration .hatch.yml, variables, isolation par PR, exemples (Node, Python, Rails…).">
+<title>Hatch documentation</title>
+<meta name="description" content="Configure and deploy self-hosted pull request previews with Hatch.">
 <link rel="icon" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -117,6 +117,7 @@ aside.toc a:hover {
 }
 
 article { min-width: 0; }
+article [id] { scroll-margin-top: 88px; }
 article > p:first-of-type { font-size: 18px; color: var(--text); }
 .lead { color: var(--text-mute); font-size: 17px; }
 
@@ -162,527 +163,245 @@ footer.foot a { color: var(--text-mute); }
 <body>
 <header class="top">
   <a href="/" class="logo">HATCH</a>
-  <nav class="nav">
-    <a href="/">Retour</a>
-    <a href="/docs/" class="active">Docs</a>
+  <nav class="nav" aria-label="Main navigation">
+    <a href="/">Home</a>
+    <a href="/docs/" class="active" aria-current="page">Docs</a>
     <a href="https://github.com/itsaam/hatch" target="_blank" rel="noopener">GitHub</a>
   </nav>
 </header>
 
 <div class="layout">
-  <aside class="toc">
+  <aside class="toc" aria-label="On this page">
     <div class="group">
-      <div class="group-title">Commencer</div>
+      <div class="group-title">Get started</div>
       <ul>
         <li><a href="#intro">Introduction</a></li>
-        <li><a href="#pourquoi">Pourquoi <code>.hatch.yml</code></a></li>
+        <li><a href="#installation">Deployment</a></li>
         <li><a href="#quickstart">Quickstart</a></li>
-        <li><a href="#cli">CLI <code>@hatchpr/cli</code></a></li>
+        <li><a href="#cli">CLI</a></li>
         <li><a href="#templates">Templates</a></li>
       </ul>
     </div>
     <div class="group">
-      <div class="group-title">Référence</div>
+      <div class="group-title">Reference</div>
       <ul>
-        <li><a href="#config">Format <code>.hatch.yml</code></a></li>
-        <li><a href="#previews">Triggers & skip</a></li>
+        <li><a href="#config"><code>.hatch.yml</code></a></li>
+        <li><a href="#previews">Preview triggers</a></li>
         <li><a href="#limits">Resource limits</a></li>
         <li><a href="#variables">Variables</a></li>
-        <li><a href="#secrets">Secret store</a></li>
+        <li><a href="#secrets">Secrets</a></li>
         <li><a href="#buildkit">BuildKit</a></li>
-        <li><a href="#healthcheck">Healthcheck</a></li>
-        <li><a href="#seed">Seed SQL</a></li>
-        <li><a href="#isolation">Isolation & cleanup</a></li>
+        <li><a href="#healthcheck">Health checks</a></li>
+        <li><a href="#seed">SQL seed</a></li>
       </ul>
     </div>
     <div class="group">
-      <div class="group-title">Exemples</div>
+      <div class="group-title">Examples</div>
       <ul>
-        <li><a href="#ex-node">Node + Postgres</a></li>
-        <li><a href="#ex-python">Python + Redis + Postgres</a></li>
-        <li><a href="#ex-rails">Rails + Sidekiq</a></li>
-        <li><a href="#ex-static">Static (sans DB)</a></li>
+        <li><a href="#ex-node">Node and PostgreSQL</a></li>
+        <li><a href="#ex-python">Python, Redis and PostgreSQL</a></li>
+        <li><a href="#ex-rails">Rails and Sidekiq</a></li>
+        <li><a href="#ex-static">Static site</a></li>
       </ul>
     </div>
     <div class="group">
-      <div class="group-title">Opérations</div>
+      <div class="group-title">Operations</div>
       <ul>
-        <li><a href="#dashboard">Dashboard & logs</a></li>
-        <li><a href="#ttl">Durée de vie & TTL</a></li>
-        <li><a href="#securite">Sécurité</a></li>
+        <li><a href="#isolation">Isolation and cleanup</a></li>
+        <li><a href="#dashboard">Dashboard and logs</a></li>
+        <li><a href="#ttl">Preview lifetime</a></li>
+        <li><a href="#securite">Security</a></li>
         <li><a href="#troubleshooting">Troubleshooting</a></li>
-        <li><a href="#limites">Limites actuelles</a></li>
+        <li><a href="#limites">Current limits</a></li>
       </ul>
     </div>
   </aside>
 
   <article>
-    <h1 id="intro">Documentation</h1>
-    <p class="lead">Hatch spawn une preview isolée (app + DB + services) pour chaque pull request, avec une URL live commentée sur la PR. Cette page explique le format <code>.hatch.yml</code>, les variables disponibles, l'isolation et plusieurs exemples réels.</p>
+    <h1 id="intro">Hatch documentation</h1>
+    <p class="lead">Hatch runs temporary previews for GitHub pull requests on your infrastructure. A preview can include your app, database, cache and workers. Hatch posts the preview link on the PR.</p>
 
-    <hr>
-
-    <h2 id="pourquoi">Pourquoi <code>.hatch.yml</code> ?</h2>
-    <p>Vercel, Netlify, Cloudflare Pages excellent sur les <strong>apps stateless</strong> (frontend statique, fonctions edge). Dès que ton app a une base de données, Redis, un worker, des secrets — ça se complique. Tu te retrouves à :</p>
+    <h2 id="installation">Deploy Hatch</h2>
     <ul>
-      <li>Partager une DB staging entre tous les reviewers → pollution de données</li>
-      <li>Faire tourner l'app localement en installant la stack → reviewer non-tech perdu</li>
-      <li>Payer Vercel Pro + DB managées + Redis managé pour chaque PR → explose la facture</li>
+      <li><a href="https://github.com/itsaam/hatch/blob/main/deploy/docker-compose.md">Docker Compose</a> runs Hatch behind Traefik with previews on the Docker host.</li>
+      <li><a href="https://github.com/itsaam/hatch/blob/main/deploy/kubernetes/README.md">Kubernetes and Argo CD</a> use a remote BuildKit builder, a container registry and preconfigured preview namespaces.</li>
     </ul>
-    <p>Hatch résout ça en lisant un fichier <code>.hatch.yml</code> à la racine du repo. Ce fichier déclare <strong>le stack complet nécessaire à ta PR</strong> — app, DB, cache, workers. Hatch spawn tout, isole chaque PR dans son propre réseau Docker, et nettoie à la fermeture.</p>
-
-    <div class="callout">
-      <strong>TL;DR</strong> — si ton projet est une app stateless avec un seul Dockerfile, Hatch fonctionne sans <code>.hatch.yml</code>. Dès que t'as besoin d'une DB, <code>.hatch.yml</code> devient obligatoire pour déclarer les services.
-    </div>
-
-    <hr>
 
     <h2 id="quickstart">Quickstart</h2>
-    <p>En 3 étapes pour ajouter Hatch à un repo existant :</p>
+    <ol>
+      <li>Install and configure a GitHub App for your Hatch instance. Subscribe to <code>pull_request</code> and <code>issue_comment</code>, and install the app on a repository whose owner is allowed by Hatch.</li>
+      <li>Add a <code>Dockerfile</code> and this <code>.hatch.yml</code> at the repository root. Set <code>port</code> to your app's listening port.</li>
+    </ol>
+<pre><code data-language="yaml">version: 1
+services:
+  web:
+    build: .
+    port: 3000
+    expose: true</code></pre>
+    <ol start="3">
+      <li>Open a pull request and leave the comment <code>@hatchpr preview</code> by itself. Use your instance's bot handle if it differs.</li>
+      <li>Wait for Hatch to post the preview link. Comment again after pushing a commit to update the preview. Closing the PR removes the preview.</li>
+    </ol>
 
-    <h3>1. Installe la GitHub App</h3>
-    <p>Sur <a href="https://github.com/apps/hatchpr" target="_blank">github.com/apps/hatchpr</a>, clique <em>Install</em>, sélectionne les repos où activer Hatch.</p>
+    <h3 id="pourquoi">When to add <code>.hatch.yml</code></h3>
+    <p>A root <code>Dockerfile</code> is enough for a single web service. Use <code>.hatch.yml</code> to set an explicit port, add services, seed a database or change when builds run.</p>
 
-    <h3>2. Ajoute un <code>.hatch.yml</code> à la racine</h3>
-<pre><code><span class="k">version:</span> <span class="n">1</span>
-
-<span class="k">services:</span>
-  <span class="k">web:</span>
-    <span class="k">build:</span> <span class="s">.</span>
-    <span class="k">port:</span> <span class="n">3000</span>
-    <span class="k">expose:</span> <span class="s">true</span>
-    <span class="k">env:</span>
-      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app</span></code></pre>
-
-    <h3>3. Demande la preview sur ta PR</h3>
-    <p>Commente <code>@hatchpr preview</code>. Hatch construit ton stack et publie le lien sur la PR. Quand tu fermes la PR, Hatch supprime la preview.</p>
-
-    <hr>
-
-    <h2 id="cli">CLI <code>@hatchpr/cli</code></h2>
-    <p>Un binaire pour scaffolder ton <code>.hatch.yml</code> à partir de la stack détectée dans le repo (Node, Python, Rails, static, plus DB / Redis si présents).</p>
-
-<pre><code><span class="c"># Install global</span>
-<span class="k">npm</span> <span class="s">i -g @hatchpr/cli</span>
-<span class="k">hatch</span> <span class="s">--help</span>
-
-<span class="c"># Ou one-shot, sans installer</span>
-<span class="k">npx</span> <span class="s">@hatchpr/cli init</span></code></pre>
-
-    <p>La seule commande aujourd'hui est <code>hatch init</code> — elle scanne le projet, propose un YAML, et l'écrit à la racine. Flags utiles :</p>
-    <ul>
-      <li><code>--dry-run</code> imprime le YAML sans écrire le fichier</li>
-      <li><code>--force</code> écrase un <code>.hatch.yml</code> existant</li>
-      <li><code>--output &lt;path&gt;</code> chemin de sortie (défaut <code>.hatch.yml</code>)</li>
-      <li><code>--verbose</code> détaille la détection</li>
-    </ul>
+    <h2 id="cli">Generate a configuration with the CLI</h2>
+    <p>Run this at the root of your repository to preview the generated configuration:</p>
+<pre><code data-language="shell">npx @hatchpr/cli init --dry-run</code></pre>
+    <p>Run <code>npx @hatchpr/cli init</code> to write the file. Use <code>--output</code> to choose a path, <code>--verbose</code> for detection details, or <code>--force</code> to overwrite an existing file. Review the generated configuration before committing it.</p>
 
     <h2 id="templates">Templates</h2>
-    <p>Pour démarrer plus vite, fork un des <a href="https://hatchpr.dev/#templates">templates prêts à l'emploi</a> — Next.js, FastAPI, Django, Rails, static. Chacun embarque un <code>.hatch.yml</code> et un <code>Dockerfile</code> qui marchent en l'état.</p>
+    <p>Start from a sample repository under an owner allowed by your Hatch instance:</p>
+    <ul>
+      <li><a href="https://github.com/itsaam/template-nextjs-postgres">Next.js and PostgreSQL</a></li>
+      <li><a href="https://github.com/itsaam/template-fastapi-postgres">FastAPI and PostgreSQL</a></li>
+      <li><a href="https://github.com/itsaam/template-django-redis">Django and Redis</a></li>
+      <li><a href="https://github.com/itsaam/template-rails-sidekiq">Rails and Sidekiq</a></li>
+      <li><a href="https://github.com/itsaam/template-static">Static site</a></li>
+    </ul>
 
     <hr>
 
-    <h2 id="config">Format <code>.hatch.yml</code></h2>
-    <p>Spec complète. Toutes les clés hors <code>version</code> et un <code>services.*</code> minimum sont optionnelles.</p>
-
-<pre><code><span class="k">version:</span> <span class="n">1</span>
-
-<span class="k">services:</span>
-  <span class="k">&lt;nom-du-service&gt;:</span>
-    <span class="c"># Une seule des deux parmi build / image</span>
-    <span class="k">build:</span> <span class="s">.</span>                    <span class="c"># chemin du Dockerfile</span>
-    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>    <span class="c"># OU image Docker pré-buildée</span>
-
-    <span class="k">port:</span> <span class="n">3000</span>                  <span class="c"># port interne exposé</span>
-    <span class="k">expose:</span> <span class="s">true</span>                 <span class="c"># un seul service expose: true (routé via Traefik)</span>
-
-    <span class="k">env:</span>
-      <span class="k">KEY:</span> <span class="s">valeur</span>
-      <span class="k">DATABASE_URL:</span> <span class="s">postgres://user:${DB_PASSWORD}@db:5432/app</span>
-
-    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>     <span class="c"># attente que ces services soient healthy</span>
-
-    <span class="k">healthcheck:</span>
-      <span class="k">cmd:</span> <span class="s">pg_isready -U app</span>
-      <span class="k">interval_seconds:</span> <span class="n">3</span>
-      <span class="k">retries:</span> <span class="n">20</span>
-
-    <span class="k">limits:</span>
-      <span class="k">memory:</span> <span class="s">512m</span>             <span class="c"># k/m/g, puissances de 1024</span>
-      <span class="k">cpu:</span> <span class="n">0.5</span>                 <span class="c"># cœurs fractionnaires</span>
-
-<span class="k">seed:</span>
-  <span class="k">after:</span> <span class="s">db</span>                     <span class="c"># service qui doit être healthy avant exécution</span>
-  <span class="k">sql:</span> <span class="s">./seed/preview.sql</span>        <span class="c"># script SQL appliqué une fois</span></code></pre>
+    <h2 id="config"><code>.hatch.yml</code> reference</h2>
+    <p>Set <code>version: 1</code> and declare at least one service. Use short DNS-compatible names such as <code>web</code> and <code>db</code>. Services use those names to reach each other.</p>
+    <table>
+      <thead><tr><th>Service key</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>build</code> or <code>image</code></td><td>Set exactly one. Use <code>build: .</code> to build the checked-out commit or name an existing image with <code>image</code>.</td></tr>
+        <tr><td><code>dockerfile</code></td><td>Override the Dockerfile path for a built service. Use a relative path. Kubernetes resolves it from the build context.</td></tr>
+        <tr><td><code>port</code></td><td>The port inside the container. Set it explicitly when routing an app or using an image with a custom port.</td></tr>
+        <tr><td><code>expose</code></td><td>Set <code>true</code> on at most one service to route public traffic to it.</td></tr>
+        <tr><td><code>env</code></td><td>Environment variables as strings. Quote values such as <code>"true"</code> and <code>"3000"</code>.</td></tr>
+        <tr><td><code>depends_on</code></td><td>List other service names Hatch should start first.</td></tr>
+        <tr><td><code>healthcheck</code></td><td>Set <code>cmd</code> and optionally <code>interval_seconds</code> and <code>retries</code>.</td></tr>
+        <tr><td><code>limits</code></td><td>Set per-service CPU and memory limits.</td></tr>
+      </tbody>
+    </table>
+    <p>For Kubernetes builds, <code>build</code> selects a directory in the GitHub archive. For portability across runtimes, use <code>build: .</code> and an explicit <code>dockerfile</code> path.</p>
 
     <h3 id="limits">Resource limits</h3>
-    <p>Chaque service peut plafonner sa mémoire et son CPU. Les valeurs sont validées au parse : <code>memory</code> accepte les suffixes <code>k</code>, <code>m</code>, <code>g</code> (puissances de 1024), <code>cpu</code> est un nombre fractionnaire jusqu'à <strong>16</strong>.</p>
+    <p>Hatch defaults to 1 GiB of memory and 1 CPU per service. Memory accepts <code>k</code>, <code>m</code> and <code>g</code> in powers of 1024. CPU accepts fractional cores up to 16. Namespace quotas can further limit Kubernetes previews.</p>
 
-<pre><code><span class="k">services:</span>
-  <span class="k">web:</span>
-    <span class="k">build:</span> <span class="s">.</span>
-    <span class="k">limits:</span>
-      <span class="k">memory:</span> <span class="s">512m</span>
-      <span class="k">cpu:</span> <span class="n">0.5</span></code></pre>
+    <h3 id="healthcheck">Health checks</h3>
+    <p>Configure a check for services that need time to become ready. The command runs inside the service with <code>/bin/sh -c</code> and must exit zero when ready. For example, use <code>pg_isready -h 127.0.0.1 -U app -d app</code> for PostgreSQL. <code>depends_on</code> controls startup order. A health check makes that order useful for databases and other dependencies.</p>
 
-    <p>Sans <code>limits</code> déclarés, les défauts appliqués sont <strong>1 GiB de mémoire</strong> et <strong>1 CPU</strong> par service. Mets des limites plus serrées sur tes workers / DB pour que les previews tiennent à plusieurs sur un même host.</p>
+    <h3 id="seed">SQL seed</h3>
+    <p>Point <code>seed.after</code> at the PostgreSQL service and <code>seed.sql</code> at a repository-relative SQL file. Hatch attempts to run the file after the database becomes ready. It may run again when the preview is recreated, so write it to tolerate repeated execution.</p>
 
-    <h3>Règles importantes</h3>
-    <ul>
-      <li><strong>Un seul</strong> service doit avoir <code>expose: true</code> — c'est celui qui reçoit le trafic HTTPS public</li>
-      <li>Les services se joignent par <strong>leur nom court</strong> (<code>db</code>, <code>redis</code>, <code>web</code>) via DNS interne</li>
-      <li><code>port</code> est auto-détecté depuis le Dockerfile si absent</li>
-      <li>Les valeurs <code>env</code> supportent la substitution de <a href="#variables">variables</a></li>
-    </ul>
-
-    <hr>
-
-    <h2 id="previews">Triggers & skip</h2>
-    <p>Par défaut, commente <code>@hatchpr preview</code> pour déployer la PR. Le bloc <code>previews:</code> de ton <code>.hatch.yml</code> permet d’activer et de filtrer les builds automatiques.</p>
-
-    <h3>Filtre de documentation en mode automatique</h3>
-    <p>Si une PR ne touche que de la documentation (Markdown, PDF, <code>LICENSE</code>, <code>docs/**</code>, <code>.github/**</code>, <code>.gitignore</code>, etc.), Hatch <strong>ne build pas</strong> et poste un commentaire d'info à la place. Les patterns par défaut couvrent les extensions et chemins suivants :</p>
-    <pre><code><span class="c"># défauts intégrés</span>
-**/*.md
-**/*.mdx
-**/*.txt
-**/*.pdf
-**/*.rst
-LICENSE*
-CHANGELOG*
-AUTHORS*
-CONTRIBUTORS*
-CODEOWNERS
-docs/**
-.github/**
-.gitignore
-.gitattributes
-.editorconfig</code></pre>
-
-    <p>Pour <strong>désactiver</strong> ce skip (forcer un build même pour des changements doc-only), ajoute dans <code>.hatch.yml</code> :</p>
-<pre><code><span class="k">previews:</span>
-  <span class="k">skip_when_only:</span> <span class="s">false</span></code></pre>
-
-    <p>Pour <strong>remplacer</strong> la liste par défaut par tes propres patterns (les deux fonctionnent ensemble : <code>skip_paths</code> définit ce qui est considéré comme "skippable", <code>skip_when_only</code> active ou non le skip) :</p>
-<pre><code><span class="k">previews:</span>
-  <span class="k">skip_paths:</span>
-    - <span class="s">"**/*.md"</span>
-    - <span class="s">"docs/**"</span>
-    - <span class="s">"my-blog/**"</span></code></pre>
-
-    <h3>Mode opt-in via @mention</h3>
-    <p>Le mode manuel est le réglage par défaut. Pour activer les builds automatiques sur un dépôt, choisis explicitement <code>auto</code>.</p>
-<pre><code><span class="k">previews:</span>
-  <span class="k">trigger:</span> <span class="s">auto</span>   <span class="c"># défaut: mention</span></code></pre>
-    <p>En mode manuel, répète <code>@hatchpr preview</code> après un push pour mettre à jour la preview. Une demande explicite fonctionne aussi pour des changements de tests, de scripts ou de documentation. Fermer la PR supprime la preview dans les deux modes.</p>
-
-    <h3>Commandes <code>@hatchpr</code></h3>
-    <p>Quel que soit le mode, tu peux piloter une preview en mentionnant le bot dans un commentaire :</p>
+    <h2 id="previews">Preview triggers</h2>
     <table>
-      <thead><tr><th>Commentaire</th><th>Effet</th></tr></thead>
+      <thead><tr><th>PR comment</th><th>Action</th></tr></thead>
       <tbody>
-        <tr><td><code>@hatchpr preview</code></td><td>Déploie / redéploie la preview</td></tr>
-        <tr><td><code>@hatchpr delete</code> / <code>destroy</code> / <code>down</code></td><td>Détruit la preview en cours</td></tr>
+        <tr><td><code>@hatchpr preview</code></td><td>Create or update a preview. Put the command alone in the comment.</td></tr>
+        <tr><td><code>@hatchpr stop</code></td><td>Remove the current preview.</td></tr>
       </tbody>
     </table>
-    <p>Seul l'auteur de la PR ou un collaborateur du repo peut déclencher une commande. Un utilisateur non autorisé reçoit un commentaire d'erreur explicite.</p>
-
-    <hr>
+    <p>The PR author or a repository collaborator can request a preview. A push or a bare mention will not start one in the default <code>mention</code> mode.</p>
+    <p>To build automatically when a PR opens, reopens or receives a new commit, add this optional block to your configuration:</p>
+<pre><code data-language="yaml">previews:
+  trigger: auto
+  skip_when_only: true
+  skip_paths:
+    - "**/*.md"
+    - "docs/**"</code></pre>
+    <p>With the GitHub App configured, automatic builds skip a PR when every changed file matches the skip list. An explicit <code>skip_paths</code> list replaces the built-in set of documentation and repository metadata patterns. Set <code>skip_when_only: false</code> to disable the filter. A manual request still works for documentation, tests or other changes.</p>
 
     <h2 id="variables">Variables</h2>
-    <p>Dans les valeurs <code>env</code>, tu peux utiliser :</p>
-
+    <p>Hatch substitutes these placeholders in <code>env</code> values and <code>build</code> paths:</p>
     <table>
-      <thead>
-        <tr><th>Variable</th><th>Exemple</th><th>Description</th></tr>
-      </thead>
+      <thead><tr><th>Variable</th><th>Value</th></tr></thead>
       <tbody>
-        <tr><td><code>${PR}</code></td><td><code>42</code></td><td>Numéro de la pull request</td></tr>
-        <tr><td><code>${SHA}</code></td><td><code>a1b2c3d</code></td><td>Commit SHA court (7 chars)</td></tr>
-        <tr><td><code>${REPO}</code></td><td><code>itsaam-hatch-demo-node</code></td><td>Slug du repo</td></tr>
-        <tr><td><code>${DB_PASSWORD}</code></td><td><code>9f3a7e...</code></td><td>Dérivé déterministe HMAC. Stable entre redeploys de la même PR, différent par PR.</td></tr>
-        <tr><td><code>${PREVIEW_HOST}</code></td><td><code>pr-42-my-app.hatchpr.dev</code></td><td>Hostname complet de la preview (sans protocole).</td></tr>
-        <tr><td><code>${PREVIEW_URL}</code></td><td><code>https://pr-42-my-app.hatchpr.dev</code></td><td>URL complète HTTPS. Pratique pour NEXTAUTH_URL / APP_URL.</td></tr>
+        <tr><td><code>${PR}</code></td><td>Pull request number.</td></tr>
+        <tr><td><code>${SHA}</code></td><td>Full commit SHA.</td></tr>
+        <tr><td><code>${REPO}</code></td><td>Repository slug.</td></tr>
+        <tr><td><code>${DB_PASSWORD}</code></td><td>Derived from the repo, PR number and instance webhook secret. Stable across rebuilds of the same PR while that secret stays the same.</td></tr>
+        <tr><td><code>${PREVIEW_HOST}</code></td><td>Assigned preview hostname.</td></tr>
+        <tr><td><code>${PREVIEW_URL}</code></td><td>Preview URL, including <code>https://</code>.</td></tr>
+        <tr><td><code>${SECRET_NAME}</code></td><td>Runtime secret stored as <code>NAME</code> for the repository.</td></tr>
       </tbody>
     </table>
 
-    <div class="callout">
-      <strong>Secrets persistants</strong> — pour des clés API (Stripe test, SendGrid dev, etc.), utilise le <a href="#secrets">secret store</a> exposé sur le dashboard <code>/app</code>. Les valeurs sont chiffrées AES-256 côté serveur, scopées par repo, et injectées comme variables d'environnement runtime dans les services de chaque preview. Référence-les dans <code>.hatch.yml</code> via <code>${SECRET_NOM}</code>.
-    </div>
-
-    <hr>
-
-    <h2 id="secrets">Secret store</h2>
-    <p>Géré depuis le dashboard <a href="https://hatchpr.dev/app"><code>/app</code></a>. Liste, ajoute et supprime des secrets <strong>par repo</strong>. Stockés chiffrés AES-256 côté serveur, jamais en clair en base. Au runtime, chaque secret est exposé comme variable d'environnement aux services de la preview.</p>
-
-    <p>Référence un secret dans ton <code>.hatch.yml</code> avec le préfixe <code>SECRET_</code> :</p>
-
-<pre><code><span class="k">services:</span>
-  <span class="k">web:</span>
-    <span class="k">env:</span>
-      <span class="k">STRIPE_KEY:</span> <span class="s">${SECRET_STRIPE_TEST_KEY}</span>
-      <span class="k">SENDGRID_KEY:</span> <span class="s">${SECRET_SENDGRID_DEV}</span></code></pre>
-
-    <h3>Backup chiffré</h3>
-    <p>Le dashboard expose un export <code>.tar.gz.enc</code> chiffré côté serveur, et un import qui relit ce ciphertext. Les secrets ne sont jamais déchiffrés côté client : le fichier circule en chiffré, et le serveur de destination peut le restaurer s'il partage la même clé maître.</p>
-
-    <div class="callout warn">
-      <strong>Distinct des build secrets</strong> — un secret du store est injecté <em>au runtime</em> dans le container. Pour des secrets de <em>build</em> (token npm privé, etc.), passe par <a href="#buildkit">BuildKit</a> et <code>RUN --mount=type=secret</code> ; ces secrets-là ne touchent jamais le runtime.
-    </div>
-
-    <hr>
+    <h2 id="secrets">Repository secrets</h2>
+    <p>Add and manage encrypted repository secrets from the <a href="/app/">dashboard</a> using your instance's admin token. Hatch makes repository secrets available to the preview services at runtime. Use credentials scoped to test systems and only authorize contributors you trust to run that code.</p>
+    <p>For example, set <code>STRIPE_KEY: ${SECRET_STRIPE_TEST_KEY}</code> under <code>env</code>. The dashboard can export and import encrypted backups. Restore them on an instance with the original encryption key.</p>
 
     <h2 id="buildkit">BuildKit</h2>
-    <p>Hatch supporte BuildKit côté builder serveur. Deux directives utiles deviennent valides dans tes Dockerfiles :</p>
-
-    <h3>Cache mounts</h3>
-    <p>Les caches persistants entre builds accélèrent <code>npm ci</code>, <code>pip install</code>, <code>bundle install</code>, <code>go mod download</code>, etc.</p>
-
-<pre><code><span class="c"># syntax=docker/dockerfile:1.4</span>
-<span class="k">FROM</span> <span class="s">node:20-alpine</span>
-<span class="k">WORKDIR</span> <span class="s">/app</span>
-<span class="k">COPY</span> <span class="s">package*.json ./</span>
-<span class="k">RUN</span> <span class="s">--mount=type=cache,target=/root/.npm npm ci</span></code></pre>
-
-    <h3>Build secrets</h3>
-    <p>Les secrets de build (token npm privé, clé GitHub pour <code>go mod</code> sur des repos privés, etc.) sont déclarés côté serveur par l'opérateur Hatch et injectés via la session gRPC BuildKit. Le secret <strong>n'apparaît jamais</strong> dans l'image finale.</p>
-
-<pre><code><span class="c"># syntax=docker/dockerfile:1.4</span>
-<span class="k">RUN</span> <span class="s">--mount=type=secret,id=npm_token \
-    NPM_TOKEN=$(cat /run/secrets/npm_token) npm ci</span></code></pre>
-
-    <div class="callout">
-      <strong>Activation</strong> — la session BuildKit s'enclenche côté serveur via <code>HATCH_BUILDKIT_SESSION=1</code>. Si ton instance ne l'a pas activée, les directives <code>--mount</code> seront ignorées par le builder legacy.
-    </div>
+    <p>Kubernetes uses a remote builder to build from a GitHub archive and push an image to the configured registry. Verify that the Dockerfile can build from an archive without local files or Git history.</p>
+    <p>The Docker runtime can supply <code>RUN --mount=type=secret</code> values when the operator enables <code>HATCH_BUILDKIT_SESSION</code> and configures <code>HATCH_BUILD_SECRETS</code>. Those settings apply to the Docker runtime. Repository secrets are for runtime use. See the <a href="https://github.com/itsaam/hatch/blob/main/deploy/kubernetes/README.md">Kubernetes guide</a> for builder compatibility.</p>
 
     <hr>
 
-    <h2 id="healthcheck">Healthcheck</h2>
-    <p>Hatch attend qu'un service soit <em>healthy</em> avant de démarrer ceux qui en dépendent (<code>depends_on</code>) et avant d'appliquer le seed. Sans healthcheck, il attend juste que le container soit <em>running</em> + 2s de grâce.</p>
+    <h2 id="ex-node">Node and PostgreSQL</h2>
+<pre><code data-language="yaml">version: 1
+services:
+  web:
+    build: .
+    port: 3000
+    expose: true
+    env:
+      DATABASE_URL: postgres://app:${DB_PASSWORD}@db:5432/app
+    depends_on: [db]
+  db:
+    image: postgres:16-alpine
+    port: 5432
+    env:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: app
+    healthcheck:
+      cmd: pg_isready -h 127.0.0.1 -U app -d app
+seed:
+  after: db
+  sql: ./seed/preview.sql</code></pre>
+    <p>Provide <code>seed/preview.sql</code> or omit the <code>seed</code> block. See the <a href="https://github.com/itsaam/hatch-demo-node">Node demo</a> for an application using PostgreSQL.</p>
 
-<pre><code><span class="k">db:</span>
-  <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
-  <span class="k">healthcheck:</span>
-    <span class="k">cmd:</span> <span class="s">pg_isready -U app -d app</span>
-    <span class="k">interval_seconds:</span> <span class="n">3</span>   <span class="c"># défaut: 5s</span>
-    <span class="k">retries:</span> <span class="n">20</span>             <span class="c"># défaut: 10</span></code></pre>
+    <h2 id="ex-python">Python, Redis and PostgreSQL</h2>
+    <p>Use the same <code>db</code> service as in the Node example. Set your web service port, usually <code>8000</code> for a Python API, and add a service named <code>redis</code> using <code>redis:7-alpine</code> with port <code>6379</code>. List both dependencies and set <code>REDIS_URL</code> to <code>redis://redis:6379/0</code>.</p>
 
-    <p>Le <code>cmd</code> est exécuté via <code>sh -c</code> dans le container. Timeout global pour devenir healthy : <strong>90 secondes</strong>. Si dépassé, le deploy échoue.</p>
+    <h2 id="ex-rails">Rails and Sidekiq</h2>
+    <p>Run Rails and Sidekiq as separate services. Give the worker a Dockerfile whose default command starts Sidekiq, and keep <code>expose: true</code> on the Rails service only. Set the same database name and Redis URL on both services. Store Rails secrets in the repository secret store. See the <a href="https://github.com/itsaam/template-rails-sidekiq">Rails and Sidekiq template</a>.</p>
 
-    <h3>Healthcheck HTTP post-deploy</h3>
-    <p>Une fois les containers <em>running</em>, Hatch effectue une vérification HTTP supplémentaire sur le service exposé : il attend qu'au moins une requête soit servie sur le port public, avec un <strong>timeout de 60 secondes</strong>. Si rien ne répond dans ce délai, la preview bascule en <code>failed</code> au lieu de rester coincée en <code>running</code> avec un service muet.</p>
-
-    <hr>
-
-    <h2 id="seed">Seed SQL</h2>
-    <p>Seeds optionnels pour pré-remplir la DB avec un utilisateur de test, des données fixtures, etc. Exécuté <strong>une fois</strong> par PR après que le service <code>seed.after</code> soit healthy.</p>
-
-<pre><code><span class="c">-- seed/preview.sql</span>
-<span class="k">CREATE TABLE IF NOT EXISTS</span> <span class="s">users</span> (
-  <span class="s">id</span> <span class="k">SERIAL PRIMARY KEY</span>,
-  <span class="s">email</span> <span class="k">TEXT UNIQUE NOT NULL</span>,
-  <span class="s">password_hash</span> <span class="k">TEXT NOT NULL</span>
-);
-
-<span class="k">INSERT INTO</span> <span class="s">users</span> (email, password_hash) <span class="k">VALUES</span>
-  (<span class="s">'demo@example.com'</span>, <span class="s">'$2a$10$...'</span>)
-<span class="k">ON CONFLICT</span> (email) <span class="k">DO NOTHING</span>;</code></pre>
-
-    <div class="callout warn">
-      <strong>Idempotent</strong> — ton seed peut être rejoué. Utilise <code>CREATE TABLE IF NOT EXISTS</code>, <code>ON CONFLICT DO NOTHING</code>, etc. Une erreur de seed n'empêche PAS le deploy (warning logué uniquement).
-    </div>
-
-    <hr>
-
-    <h2 id="isolation">Isolation & cleanup</h2>
-    <p>Pour chaque PR, Hatch crée :</p>
-    <ul>
-      <li>Un <strong>réseau Docker dédié</strong> : <code>hatch-net-&lt;slug&gt;-&lt;pr&gt;</code> (bridge isolé)</li>
-      <li>Un container par service : <code>hatch-pr-&lt;slug&gt;-&lt;pr&gt;-&lt;service&gt;</code></li>
-      <li>Des alias DNS internes : <code>web</code>, <code>db</code>, <code>redis</code>… pour que les services se causent sans connaître les noms complets</li>
-    </ul>
-    <p>Seul le service <code>expose: true</code> est joignable de l'extérieur via Traefik + Let's Encrypt sur <code>https://pr-&lt;pr&gt;-&lt;slug&gt;.hatchpr.dev</code>.</p>
-
-    <h3>Cleanup automatique</h3>
-    <ul>
-      <li><strong>PR mergée ou fermée</strong> → suppression immédiate : containers + network (volumes DB inclus)</li>
-      <li><strong>TTL d'inactivité</strong> → 7 jours par défaut, la preview hiberne et le bot commente. Reouvrir = redeploy.</li>
-      <li><strong>Boot API</strong> → reconciliation : les containers orphelins sont détruits, les previews zombies marquées failed</li>
-    </ul>
-    <div class="callout">
-      <strong>Zéro pollution</strong> — chaque PR voit uniquement <em>ses</em> données. Deux reviewers qui inscrivent le même email sur deux PR différentes ne se marchent pas dessus.
-    </div>
+    <h2 id="ex-static">Static site</h2>
+    <p>A root Dockerfile that copies your site into Nginx can use the single-service fallback. If your site needs a build, include that step in the Dockerfile or copy files that are committed to the repository.</p>
+<pre><code data-language="dockerfile">FROM nginx:alpine
+COPY ./public/ /usr/share/nginx/html/
+EXPOSE 80</code></pre>
 
     <hr>
 
-    <h2 id="ex-node">Exemple : Node + Postgres</h2>
-    <p>App Express qui expose <code>/api/register</code> et <code>/api/login</code>. Source du demo : <a href="https://github.com/itsaam/hatch-demo-node" target="_blank">github.com/itsaam/hatch-demo-node</a>.</p>
+    <h2 id="isolation">Isolation and cleanup</h2>
+    <p>Docker Compose uses a dedicated Docker network for each preview. Kubernetes assigns a separate preconfigured namespace with its own resource quota and network policy. Services share the preview's network. Closing the PR removes the preview resources.</p>
 
-<pre><code><span class="k">version:</span> <span class="n">1</span>
+    <h2 id="dashboard">Dashboard and logs</h2>
+    <p>Open the <a href="/app/">dashboard</a> with your instance's admin token to view preview status, build and runtime logs, and repository secrets. You can redeploy or stop a preview from the dashboard.</p>
 
-<span class="k">services:</span>
-  <span class="k">web:</span>
-    <span class="k">build:</span> <span class="s">.</span>
-    <span class="k">port:</span> <span class="n">3000</span>
-    <span class="k">expose:</span> <span class="s">true</span>
-    <span class="k">env:</span>
-      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app</span>
-      <span class="k">PORT:</span> <span class="s">"3000"</span>
-    <span class="k">depends_on:</span> <span class="s">[db]</span>
+    <h2 id="ttl">Preview lifetime</h2>
+    <p>The default expiration time is seven days without a preview update. Operators can change <code>PREVIEW_TTL_HOURS</code>. To recreate an expired preview in manual mode, comment <code>@hatchpr preview</code> again.</p>
 
-  <span class="k">db:</span>
-    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
-    <span class="k">env:</span>
-      <span class="k">POSTGRES_USER:</span> <span class="s">app</span>
-      <span class="k">POSTGRES_PASSWORD:</span> <span class="s">${DB_PASSWORD}</span>
-      <span class="k">POSTGRES_DB:</span> <span class="s">app</span>
-    <span class="k">healthcheck:</span>
-      <span class="k">cmd:</span> <span class="s">pg_isready -U app</span>
-      <span class="k">interval_seconds:</span> <span class="n">3</span>
-      <span class="k">retries:</span> <span class="n">20</span>
-
-<span class="k">seed:</span>
-  <span class="k">after:</span> <span class="s">db</span>
-  <span class="k">sql:</span> <span class="s">./seed/preview.sql</span></code></pre>
-
-    <h2 id="ex-python">Exemple : Python (FastAPI/Django) + Postgres + Redis</h2>
-
-<pre><code><span class="k">version:</span> <span class="n">1</span>
-
-<span class="k">services:</span>
-  <span class="k">api:</span>
-    <span class="k">build:</span> <span class="s">.</span>
-    <span class="k">port:</span> <span class="n">8000</span>
-    <span class="k">expose:</span> <span class="s">true</span>
-    <span class="k">env:</span>
-      <span class="k">DATABASE_URL:</span> <span class="s">postgresql://app:${DB_PASSWORD}@db:5432/app</span>
-      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379/0</span>
-      <span class="k">DEBUG:</span> <span class="s">"true"</span>
-    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>
-
-  <span class="k">db:</span>
-    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
-    <span class="k">env:</span>
-      <span class="k">POSTGRES_USER:</span> <span class="s">app</span>
-      <span class="k">POSTGRES_PASSWORD:</span> <span class="s">${DB_PASSWORD}</span>
-      <span class="k">POSTGRES_DB:</span> <span class="s">app</span>
-    <span class="k">healthcheck:</span>
-      <span class="k">cmd:</span> <span class="s">pg_isready -U app</span>
-
-  <span class="k">redis:</span>
-    <span class="k">image:</span> <span class="s">redis:7-alpine</span>
-    <span class="k">healthcheck:</span>
-      <span class="k">cmd:</span> <span class="s">redis-cli ping</span></code></pre>
-
-    <h2 id="ex-rails">Exemple : Rails + Sidekiq</h2>
-
-<pre><code><span class="k">version:</span> <span class="n">1</span>
-
-<span class="k">services:</span>
-  <span class="k">web:</span>
-    <span class="k">build:</span> <span class="s">.</span>
-    <span class="k">port:</span> <span class="n">3000</span>
-    <span class="k">expose:</span> <span class="s">true</span>
-    <span class="k">env:</span>
-      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app_pr_${PR}</span>
-      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379/0</span>
-      <span class="k">RAILS_ENV:</span> <span class="s">production</span>
-      <span class="k">SECRET_KEY_BASE:</span> <span class="s">${DB_PASSWORD}</span>
-    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>
-
-  <span class="k">worker:</span>
-    <span class="k">build:</span> <span class="s">.</span>
-    <span class="k">env:</span>
-      <span class="k">DATABASE_URL:</span> <span class="s">postgres://app:${DB_PASSWORD}@db:5432/app_pr_${PR}</span>
-      <span class="k">REDIS_URL:</span> <span class="s">redis://redis:6379/0</span>
-    <span class="k">depends_on:</span> <span class="s">[db, redis]</span>
-
-  <span class="k">db:</span>
-    <span class="k">image:</span> <span class="s">postgres:16-alpine</span>
-    <span class="k">env:</span>
-      <span class="k">POSTGRES_USER:</span> <span class="s">app</span>
-      <span class="k">POSTGRES_PASSWORD:</span> <span class="s">${DB_PASSWORD}</span>
-
-  <span class="k">redis:</span>
-    <span class="k">image:</span> <span class="s">redis:7-alpine</span></code></pre>
-
-    <p>Le <code>worker</code> n'a pas de <code>expose: true</code> → il tourne en interne, pas accessible publiquement.</p>
-
-    <h2 id="ex-static">Exemple : Static (sans DB)</h2>
-    <p>Pour un site statique ou une SPA, tu n'as <strong>pas besoin</strong> de <code>.hatch.yml</code>. Hatch détecte le <code>Dockerfile</code> à la racine, le build, et route directement.</p>
-<pre><code><span class="c"># Dockerfile minimal suffit</span>
-<span class="k">FROM</span> <span class="s">nginx:alpine</span>
-<span class="k">COPY</span> <span class="s">./dist</span> <span class="s">/usr/share/nginx/html</span>
-<span class="k">EXPOSE</span> <span class="n">80</span></code></pre>
-
-    <hr>
-
-    <h2 id="dashboard">Dashboard & logs</h2>
-    <p>Le dashboard <a href="https://hatchpr.dev/app"><code>/app</code></a> liste tes previews actives et expose, pour chacune :</p>
+    <h2 id="securite">Security</h2>
     <ul>
-      <li>Le statut courant (<code>queued</code>, <code>building</code>, <code>running</code>, <code>failed</code>, <code>hibernated</code>)</li>
-      <li>Les logs de <strong>build</strong> et de <strong>runtime</strong> en streaming temps réel via SSE — pas de polling, les nouvelles lignes arrivent à la milliseconde</li>
-      <li>La gestion des <a href="#secrets">secrets</a> par repo (list / add / delete / backup chiffré)</li>
-    </ul>
-
-    <h2 id="securite">Sécurité</h2>
-    <ul>
-      <li><strong>Allowlist d'owners</strong> — les webhooks GitHub ne sont acceptés que pour les owners (user / org) listés dans <code>HATCH_ALLOWED_OWNERS</code> côté serveur. Toute PR d'un owner non listé est ignorée silencieusement.</li>
-      <li><strong>PR de fork</strong> — refusées par défaut. Le code d'un fork ne peut pas builder sur ton infra, ni accéder au secret store.</li>
-      <li><strong>Secrets en base</strong> — chiffrés AES-256, jamais loggés, jamais retournés en clair par l'API.</li>
-      <li><strong>Hardening du socket Docker</strong> (opt-in) — le control plane parle à <code>/var/run/docker.sock</code>, ce qui équivaut à root sur l'host si <code>api</code> est compromis. Le dossier <code>security/</code> du repo fournit une isolation à 2 étages : <a href="https://github.com/Tecnativa/docker-socket-proxy" target="_blank" rel="noopener">tecnativa/docker-socket-proxy</a> bloque les endpoints inutiles (<code>/volumes</code>, <code>/swarm</code>, <code>/secrets</code>, <code>/system</code>, …), et un body filter Python inspecte les <code>POST /containers/create</code> pour rejeter <code>Privileged</code>, <code>CapAdd</code> dangereuses, <code>NetworkMode/PidMode/IpcMode=host</code>, <code>seccomp/apparmor=unconfined</code>, <code>Devices</code>, et tout bind mount sortant d'une allowlist. Activation via <code>docker-compose.override.yml</code> — voir <a href="https://github.com/itsaam/hatch/blob/main/security/README.md" target="_blank" rel="noopener">security/README.md</a>.</li>
-    </ul>
-
-    <h2 id="ttl">Durée de vie & TTL</h2>
-    <ul>
-      <li>Une preview active reste en ligne tant que la PR est ouverte</li>
-      <li>Sans activité (push, commit) pendant <strong>7 jours</strong>, elle hiberne automatiquement : containers supprimés, DB purgée</li>
-      <li>Pour réveiller : push un commit sur la branche → Hatch redeploy à neuf</li>
-      <li>TTL configurable par l'admin du serveur (env <code>PREVIEW_TTL_HOURS</code>)</li>
+      <li>Set <code>HATCH_ALLOWED_OWNERS</code> to trusted GitHub accounts or organizations. Hatch rejects fork PRs for preview deployment.</li>
+      <li>Use test credentials and keep production secrets out of preview environments. Preview services can read their runtime environment variables.</li>
+      <li>For Docker, see the <a href="https://github.com/itsaam/hatch/blob/main/security/README.md">Docker socket hardening guide</a>. For Kubernetes, use a dedicated builder with mutual TLS and apply the recommended network policies.</li>
     </ul>
 
     <h2 id="troubleshooting">Troubleshooting</h2>
+    <h3>The bot does not start a preview</h3>
+    <p>Check that the GitHub App is installed for the repository, the owner is allowed, and GitHub delivered <code>issue_comment</code> to the instance. Use the exact command as the entire comment.</p>
+    <h3>The build fails or the service cannot start</h3>
+    <p>Read the build and runtime logs. Check that the Dockerfile builds with all required files in its context. Verify the listening port, service DNS names, and health checks. On Kubernetes, also verify that the builder can reach the registry and preview pods can pull the image.</p>
+    <h3>The preview URL does not open</h3>
+    <p>Check <code>expose: true</code>, the service port, the wildcard DNS and the ingress or tunnel's TLS configuration. A running container alone cannot prove that the public route is reachable.</p>
 
-    <h3><code>deploy failed: build ...</code></h3>
-    <ul>
-      <li>Vérifie que ton <code>Dockerfile</code> build en local : <code>docker build .</code></li>
-      <li>Un <code>.dockerignore</code> manquant peut faire exploser la taille du contexte</li>
-      <li>Les logs complets sont visibles côté serveur (<code>docker logs hatch-api-1</code>)</li>
-    </ul>
-
-    <h3><code>seed failed (non-fatal)</code></h3>
-    <ul>
-      <li>Ton SQL a une syntax error ou référence une table inexistante</li>
-      <li>Rends ton seed idempotent avec <code>CREATE TABLE IF NOT EXISTS</code> et <code>ON CONFLICT DO NOTHING</code></li>
-      <li>Le deploy continue quand même — seule la DB reste vide</li>
-    </ul>
-
-    <h3>Le service ne peut pas joindre la DB</h3>
-    <ul>
-      <li>Vérifie que tu utilises le <strong>nom court</strong> du service dans l'URL (<code>db</code>, pas <code>hatch-pr-xxx-db</code>)</li>
-      <li>Ajoute <code>depends_on: [db]</code> pour garantir l'ordre de démarrage</li>
-      <li>La DB doit avoir un <code>healthcheck</code> pour que <code>depends_on</code> attende vraiment qu'elle soit prête</li>
-    </ul>
-
-    <h3>Certificat SSL invalide pendant ~30s</h3>
-    <p>Let's Encrypt émet le cert à la volée. Lors du premier accès à une nouvelle PR, attends 30s et force-refresh.</p>
-
-    <hr>
-
-    <h2 id="limites">Limites actuelles</h2>
-    <p>Hatch est en beta. Ce qui n'est pas encore supporté :</p>
-    <ul>
-      <li>Docker 29+ avec <strong>containerd snapshotter</strong> par défaut — le builder utilisé par Hatch ne fonctionne pas sur cette configuration. Utilise un Docker antérieur (&lt; 29) ou désactive le containerd snapshotter pour l'instant.</li>
-      <li>Pas de <strong>volumes persistants</strong> — la DB d'une preview est toujours repartie de zéro au redeploy (et c'est souvent ce qu'on veut)</li>
-      <li>Pas de <strong>multi-region</strong> — une seule infra host pour l'instant</li>
-    </ul>
-
-    <p class="lead" style="margin-top: 40px;">Retour à la <a href="/">landing</a> · <a href="https://github.com/itsaam/hatch" target="_blank">Code source</a> · <a href="https://github.com/itsaam/hatch/issues/new" target="_blank" rel="noopener">Signaler un bug</a></p>
+    <h2 id="limites">Current limits</h2>
+    <p>Preview databases are temporary and can be recreated on redeploy. Kubernetes capacity is limited by the configured preview namespaces, their quotas and builder availability.</p>
+    <p><a href="https://github.com/itsaam/hatch/issues/new" target="_blank" rel="noopener">Report a problem</a></p>
   </article>
 </div>
 
 <footer class="foot">
-  HATCH — <a href="https://hatchpr.dev">hatchpr.dev</a> — Self-hosted PR preview deployments
+  HATCH · <a href="https://hatchpr.dev">hatchpr.dev</a> · Self-hosted PR previews
 </footer>
 </body>
 </html>

@@ -15,13 +15,13 @@ export default function Cta() {
         <RevealText as="h2" className="display" style={{
           fontSize: 'clamp(40px, 7vw, 96px)', fontWeight: 800, lineHeight: 0.95
         }}>
-          Sois prévenu au <span className="italic-accent" style={{ fontSize: 'inherit' }}>lancement.</span>
+          Get notified at <span className="italic-accent" style={{ fontSize: 'inherit' }}>launch.</span>
         </RevealText>
 
         <p style={{
           marginTop: 28, color: 'var(--text-mute)', fontSize: 17, maxWidth: 540, marginInline: 'auto'
         }}>
-          Pas de spam. Un email quand la beta privée ouvre, et c'est tout.
+          Leave your email for the beta announcement.
         </p>
 
         <div style={{ marginTop: 40, display: 'grid', placeItems: 'center' }}>
@@ -33,7 +33,7 @@ export default function Cta() {
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16
         }}>
           <p className="mono" style={{ color: 'var(--text-faint)', fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase', margin: 0 }}>
-            Open source · MIT
+            Open source · AGPL-3.0
           </p>
           <a href="https://github.com/itsaam/hatch" target="_blank" rel="noopener"
             style={{

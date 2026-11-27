@@ -1,83 +1,31 @@
-# Hatch — Docker socket hardening
+# Docker socket hardening
 
-Le control plane de hatch a besoin du Docker Engine API pour build et lancer
-les previews. Sans précaution, monter `/var/run/docker.sock` dans le container
-`api` équivaut à donner **root sur l'host** à tout attaquant qui obtiendrait
-une RCE dans `api` (création d'un container `--privileged` + bind mount sur
-`/`).
+This optional Compose setup puts a proxy and a request filter between the
+Hatch API and the host's Docker socket. Direct Docker API access is equivalent
+to administrator access to the host. Use this guide only for the Docker
+runtime.
 
-Ce dossier contient une isolation à deux étages, optionnelle, à activer via le
-`docker-compose.override.yml` fourni en exemple plus bas.
+## How it works
 
-## Architecture
-
-```
-host /var/run/docker.sock (RO)
-        │
-        ▼
-docker-proxy (tecnativa/docker-socket-proxy)   ← Layer 1 : filtre par endpoint
-        │  TCP 2375, réseau interne dédié
-        ▼
-docker-body-filter (body_filter.py)            ← Layer 2 : filtre par body JSON
-        │  unix socket /shared/docker.sock
-        ▼
-api (voit /var/run/docker.sock)
+```text
+Docker socket → Docker socket proxy → creation filter → Hatch API
 ```
 
-`api` ne touche jamais le vrai socket de l'host. Le seul container qui le
-monte est `docker-proxy`, en lecture seule.
+Only the socket proxy mounts the host socket. Hatch connects to the filter's
+Unix socket. The proxy allows the Docker API endpoint groups Hatch needs for
+containers, images, networks, builds and BuildKit sessions. The filter checks
+container creation requests for privileged settings, host namespace sharing,
+dangerous capabilities, device access and unexpected bind mounts. Rejected
+requests return HTTP 403 and appear in the filter logs.
 
-## Layer 1 — endpoint allowlist (tecnativa)
+BuildKit sessions, container attach and exec streams pass through without
+binary inspection.
 
-[`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
-filtre l'API par chemin. Les endpoints autorisés correspondent à ce que hatch
-appelle réellement (`/containers`, `/images`, `/networks`, `/exec`, `/build`,
-`/session`, `/info`, `/version`, `/_ping`, `/auth`).
+## Enable the proxy
 
-Les endpoints suivants renvoient **403** :
-
-```
-/volumes  /swarm  /secrets  /configs  /tasks  /services
-/system   /plugins  /distribution  /nodes
-```
-
-## Layer 2 — body filter (`body_filter.py`)
-
-Tecnativa ne valide pas les bodies. Un attaquant pourrait passer un
-`HostConfig.Privileged: true` à `POST /containers/create` et s'évader.
-
-`body_filter.py` est un petit reverse-proxy Python (~150 lignes, stdlib
-uniquement) qui :
-
-1. écoute sur un unix socket dans un volume partagé avec `api` ;
-2. relaye toutes les requêtes vers le proxy tecnativa, **sauf** `POST /containers/create` qu'il inspecte ;
-3. rejette avec `403` toute requête dont le `HostConfig` contient :
-
-   | Champ | Règle |
-   |---|---|
-   | `Privileged` | doit être absent ou `false` |
-   | `PublishAllPorts` | doit être absent ou `false` |
-   | `Binds`, `Mounts[].Source` (type=bind) | host path doit être dans `ALLOWED_HOST_PATHS` |
-   | `CapAdd` | aucune capability dangereuse (`SYS_ADMIN`, `SYS_PTRACE`, `NET_ADMIN`, `DAC_OVERRIDE`, `BPF`, `ALL`, …) |
-   | `NetworkMode`, `PidMode`, `IpcMode`, `UsernsMode`, `UTSMode`, `CgroupnsMode` | doit ≠ `host` |
-   | `SecurityOpt` | rejette `seccomp=unconfined`, `apparmor=unconfined`, `no-new-privileges:false` |
-   | `Devices`, `DeviceRequests` | rejet si renseignés |
-   | `Runtime` | doit être `runc` ou vide |
-   | `GroupAdd` | rejette `0`, `root`, `docker` |
-
-Les requêtes hijackées (`/exec/start`, `/containers/{id}/attach`, build
-sessions BuildKit) sont relayées telles quelles en mode bidirectionnel — le
-filtre ne lit jamais de stream binaire.
-
-Le filtre logue chaque blocage avec le détail :
-
-```
-2026-05-05 19:28:39 WARNING BLOCKED POST /v1.43/containers/create: HostConfig.CapAdd=CAP_SYS_PTRACE
-```
-
-## Activer l'isolation
-
-Crée un `docker-compose.override.yml` à la racine du repo (déjà gitignoré) :
+Create a `docker-compose.override.yml` in the repository root using the example
+below. The override requires Docker Compose support for `!override`. Keep the
+proxy and filter on their internal Docker network.
 
 ```yaml
 services:
@@ -146,32 +94,24 @@ volumes:
   hatch_docker_sock:
 ```
 
-Puis `docker compose up -d`. Le compose principal (`docker-compose.yml`) reste
-inchangé.
+Run `docker compose up -d` when ready to apply the override. Verify the recreated
+API uses the filter socket and check that a preview can start and stop.
 
-## Personnaliser l'allowlist des bind mounts
+## Bind mount allowlist
 
-Si ton déploiement a besoin d'exposer d'autres chemins host à l'`api` (par
-exemple un cache BuildKit partagé sous `/var/lib/hatch/buildkit-cache`),
-ajoute-les à `ALLOWED_HOST_PATHS` (séparés par virgules) :
+Set `ALLOWED_HOST_PATHS` to the comma-separated host paths that previews need.
+Keep the list as small as possible.
 
 ```yaml
-ALLOWED_HOST_PATHS: /etc/hatch/secrets,/var/lib/hatch/buildkit-cache
+ALLOWED_HOST_PATHS: /etc/hatch/secrets
 ```
 
-Tout chemin host hors de cette liste sera refusé en bind mount.
+## Scope
 
-## Limites
-
-- Le proxy tecnativa ne valide pas les bodies ; tout le filtrage de
-  `/containers/create` repose donc sur `body_filter.py`. Si tu modifies les
-  endpoints autorisés au layer 1, garde en tête que d'autres endpoints
-  (`POST /containers/{id}/update`, par ex.) peuvent eux aussi accepter du
-  `HostConfig` — étends le filtre en conséquence.
-- Les options dangereuses passées via `Cmd` ou `Entrypoint` (un binaire
-  malveillant déjà dans l'image) ne sont pas détectées : c'est hors scope
-  d'un proxy de socket. Restreindre les images buildables est un sujet
-  orthogonal (registry allowlist, scan, signature).
-- Les containers déjà en cours d'exécution avant l'activation de l'isolation
-  ne sont pas affectés ; un `down` puis `up -d` est nécessaire pour basculer
-  `api` derrière le filtre.
+- The creation filter checks `POST /containers/create`. Review the policy
+  before allowing any additional endpoint groups or methods.
+- A socket proxy cannot make arbitrary preview code safe. Restrict allowed
+  repositories, keep production credentials out of previews and review the
+  images they can run.
+- Containers already started with another configuration retain their settings
+  until they are recreated.

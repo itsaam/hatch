@@ -1,29 +1,29 @@
 import Section from '../components/Section.jsx'
 
 const items = [
-  { s: 'done', t: 'Concept validé' },
-  { s: 'done', t: 'Architecture définie' },
+  { s: 'done', t: 'On-demand previews' },
+  { s: 'done', t: 'Repository allowlist' },
   { s: 'done', t: 'Control plane' },
-  { s: 'done', t: 'Webhook GitHub handler' },
-  { s: 'done', t: 'Docker orchestration' },
-  { s: 'done', t: 'Traefik routing dynamique' },
-  { s: 'done', t: 'Bot GitHub App (comments PR)' },
-  { s: 'done', t: 'Cleanup auto (TTL + reconcile)' },
-  { s: 'wip', t: 'Dashboard' },
-  { s: 'todo', t: 'Beta privée' }
+  { s: 'done', t: 'GitHub webhooks' },
+  { s: 'done', t: 'Docker Compose deployment' },
+  { s: 'done', t: 'Traefik routing' },
+  { s: 'done', t: 'GitHub PR comments' },
+  { s: 'done', t: 'Cleanup on close or expiry' },
+  { s: 'done', t: 'Dashboard and logs' },
+  { s: 'wip', t: 'Kubernetes rollout validation' }
 ]
 
 const symbol = { done: '☑', wip: '◐', todo: '☐' }
 const color = { done: 'var(--accent-2)', wip: 'var(--accent)', todo: 'var(--text-faint)' }
-const tlabel = { done: 'FAIT', wip: 'EN COURS', todo: 'À VENIR' }
+const tlabel = { done: 'DONE', wip: 'IN PROGRESS', todo: 'PLANNED' }
 
 export default function Status() {
   return (
-    <Section id="status" label="[06] EN COURS">
+    <Section id="status" label="[06] PROJECT STATUS">
       <h2 className="display" style={{
         fontSize: 'clamp(32px, 5vw, 56px)', maxWidth: 800, marginBottom: 60, fontWeight: 700
       }}>
-        Là où on en est.
+        Project status.
       </h2>
 
       <ul style={{
