@@ -46,6 +46,9 @@ var migrationKubeOperations string
 //go:embed migrations/008_kube_operation_order.sql
 var migrationKubeOperationOrder string
 
+//go:embed migrations/009_kube_pr_snapshot.sql
+var migrationKubePRSnapshot string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -93,7 +96,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs, migrationKubeOperations, migrationKubeOperationOrder} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}

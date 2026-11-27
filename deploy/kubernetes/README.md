@@ -60,6 +60,9 @@ are skipped. Repositories, build contexts, and Dockerfiles are fetched at the
 PR commit, with `dockerfile` relative to `build`. Kubernetes builds consume a
 GitHub archive and require a Dockerfile that builds from that archive. Set an
 explicit `port` if the Dockerfile relies on variable or inherited `EXPOSE`.
+Hatch reads the current PR state from GitHub before updating the queue. If
+GitHub App mode is disabled, these reads use the unauthenticated GitHub API,
+which supports only public repositories and has a lower request limit.
 `HATCH_BUILD_SECRETS` applies to the Docker runtime. Dockerfiles that require
 these secret mounts need to be adapted before they can run on Kubernetes.
 Set up retention in the preview registry for pushed image tags and cached layers.

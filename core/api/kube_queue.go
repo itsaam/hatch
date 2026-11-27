@@ -46,24 +46,74 @@ func enqueueKubeTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, operation str
 	return err
 }
 
-func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, deploy bool, updatedAt time.Time, confirmedOpen bool) error {
-	if updatedAt.IsZero() {
-		return errors.New("GitHub pull request update time is missing")
+type kubePullIntent uint8
+
+const (
+	kubePullChanged kubePullIntent = iota
+	kubePullClosed
+	kubePullRedeploy
+)
+
+type pullStateReader func(context.Context, PreviewRef) (*pullState, error)
+
+func (d *Deployer) githubPullState(ctx context.Context, ref PreviewRef) (*pullState, error) {
+	owner, repo, ok := splitRepo(ref.Repo)
+	if !ok || ref.PR <= 0 {
+		return nil, errors.New("invalid pull request")
 	}
-	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		// GitHub timestamps have one-second resolution. When conflicting deliveries
-		// share a timestamp, keep the closure rather than exposing a stale preview.
-		tag, err := tx.Exec(ctx, `INSERT INTO kube_pull_request_events (repo_full_name, pr_number, event_at, closed)
+	if d.app != nil && ref.InstallationID != 0 {
+		return d.app.GetPullRequest(ctx, ref.InstallationID, owner, repo, ref.PR)
+	}
+	return fetchPullRequest(ctx, d.httpExt, "https://api.github.com", "", owner, repo, ref.PR)
+}
+
+func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, intent kubePullIntent, read pullStateReader) (bool, error) {
+	var queued bool
+	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		// GitHub webhook timestamps cannot order changes within one second.
+		// Serialize the fresh read and its queue write for this PR. No Kubernetes
+		// request is made under this lock, and independent PRs keep their own locks.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(
+			'hatch-kube-pr:' || lower($1::text) || '#' || $2::integer::text, 0))`, ref.Repo, ref.PR); err != nil {
+			return err
+		}
+		pr, err := read(ctx, ref)
+		if err != nil {
+			return err
+		}
+		if pr.State != "open" && pr.State != "closed" {
+			return errors.New("invalid GitHub pull request state")
+		}
+		closed := pr.State == "closed"
+		if !closed {
+			if intent == kubePullClosed || !strings.EqualFold(pr.Head.Repo.FullName, ref.Repo) {
+				return nil
+			}
+			if pr.Head.SHA == "" || pr.Head.Ref == "" {
+				return errors.New("GitHub pull request head is incomplete")
+			}
+			if intent == kubePullChanged && pr.Head.SHA != ref.SHA {
+				return nil
+			}
+			ref.SHA, ref.Branch = pr.Head.SHA, pr.Head.Ref
+		}
+
+		tag, err := tx.Exec(ctx, `INSERT INTO kube_pull_request_events (repo_full_name, pr_number, head_sha, closed)
 			VALUES ($1,$2,$3,$4) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
-			SET event_at=EXCLUDED.event_at, closed=EXCLUDED.closed
-			WHERE EXCLUDED.event_at > kube_pull_request_events.event_at OR
-			(EXCLUDED.event_at = kube_pull_request_events.event_at AND NOT kube_pull_request_events.closed
-			AND (EXCLUDED.closed OR $5))`, ref.Repo, ref.PR, updatedAt, !deploy, confirmedOpen)
+			SET head_sha=EXCLUDED.head_sha, closed=EXCLUDED.closed
+			WHERE kube_pull_request_events.closed IS DISTINCT FROM EXCLUDED.closed
+			   OR kube_pull_request_events.head_sha IS DISTINCT FROM EXCLUDED.head_sha
+			   OR $5::boolean`, ref.Repo, ref.PR, pr.Head.SHA, closed, intent == kubePullRedeploy && !closed)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return queueKubePreviewTx(ctx, tx, ref, deploy)
+		if err := queueKubePreviewTx(ctx, tx, ref, !closed); err != nil {
+			return err
+		}
+		queued = !closed
+		return nil
 	})
+	return queued && err == nil, err
 }
 
 func queueKubePreviewTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, deploy bool) error {
@@ -267,29 +317,33 @@ func (d *Deployer) deployKubeSpec(ctx context.Context, job kubeOperation, spec *
 	}, func(ctx context.Context, sqlPath string) ([]byte, error) {
 		return fetchRepoFile(ctx, d.httpExt, d.app, ref.InstallationID, ref.Repo, sqlPath, ref.SHA)
 	}, func(ctx context.Context, publish func(context.Context) error) error {
-		return d.publishCurrentKubeOperation(ctx, job, publish)
+		return d.publishCurrentKubeOperation(ctx, job, d.githubPullState, publish)
 	})
 }
 
-func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOperation, publish func(context.Context) error) error {
-	if owner, repo, ok := splitRepo(job.ref.Repo); ok && d.app != nil && job.ref.InstallationID != 0 {
-		current, err := d.app.GetPullRequest(ctx, job.ref.InstallationID, owner, repo, job.ref.PR)
+func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOperation, read pullStateReader, publish func(context.Context) error) error {
+	check := func() error {
+		if err := d.checkKubePublication(ctx, job); err != nil {
+			return err
+		}
+		current, err := read(ctx, job.ref)
 		if err != nil {
 			return err
 		}
-		if current.State != "open" {
-			return errors.New("GitHub pull request is no longer open")
+		if current.State != "open" || !strings.EqualFold(current.Head.Repo.FullName, job.ref.Repo) {
+			return errors.New("GitHub pull request is no longer open in its original repository")
 		}
+		return d.checkKubePublication(ctx, job)
 	}
-	if err := d.checkKubePublication(ctx, job); err != nil {
+	if err := check(); err != nil {
 		return err
 	}
 	if err := publish(ctx); err != nil {
 		return err
 	}
-	// A webhook may replace the intent while Kubernetes handles the request.
-	// Let the worker tear down the superseded slot before releasing its PR lock.
-	return d.checkKubePublication(ctx, job)
+	// GitHub may change before the webhook reaches us. Recheck both sources
+	// so the worker can tear down the superseded slot under its PR lock.
+	return check()
 }
 
 func (d *Deployer) checkKubePublication(ctx context.Context, job kubeOperation) error {

@@ -37,9 +37,8 @@ type prEvent struct {
 	Action      string `json:"action"`
 	Number      int    `json:"number"`
 	PullRequest struct {
-		HTMLURL   string    `json:"html_url"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Head      struct {
+		HTMLURL string `json:"html_url"`
+		Head    struct {
 			Ref  string `json:"ref"`
 			SHA  string `json:"sha"`
 			Repo struct {
@@ -162,7 +161,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 		//    or push directly to a branch of the base repo.
 		// Both paths return 202 Accepted with a silent log: we avoid
 		//    leaking which owners are allowed via response shape.
-		owner, repo, splitOK := splitRepo(ev.Repository.FullName)
+		owner, _, splitOK := splitRepo(ev.Repository.FullName)
 		if !splitOK || !allowedOwners[strings.ToLower(owner)] {
 			log.Printf("webhook: owner %q not in allowlist, skipping %s#%d",
 				owner, ev.Repository.FullName, ev.Number)
@@ -223,22 +222,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			}
 
 			if deployer.kube != nil {
-				updatedAt := ev.PullRequest.UpdatedAt
-				confirmed := app != nil && ref.InstallationID != 0
-				if confirmed {
-					pr, err := app.GetPullRequest(ctx, ref.InstallationID, owner, repo, ref.PR)
-					if err != nil {
-						log.Printf("confirm Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
-						http.Error(w, "pull request state unavailable", http.StatusServiceUnavailable)
-						return
-					}
-					if pr.State != "open" || pr.Head.SHA != ref.SHA {
-						writeOK(w)
-						return
-					}
-					updatedAt = pr.UpdatedAt
-				}
-				if err := deployer.queueKubePullRequest(ctx, ref, true, updatedAt, confirmed); err != nil {
+				if _, err := deployer.queueKubePullRequest(ctx, ref, kubePullChanged, deployer.githubPullState); err != nil {
 					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -262,7 +246,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		case "closed":
 			if deployer.kube != nil {
-				if err := deployer.queueKubePullRequest(ctx, ref, false, ev.PullRequest.UpdatedAt, false); err != nil {
+				if _, err := deployer.queueKubePullRequest(ctx, ref, kubePullClosed, deployer.githubPullState); err != nil {
 					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return

@@ -157,7 +157,12 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		// deployer's notifier has a comment id to update.
 		var err error
 		if deployer.kube != nil {
-			err = deployer.queueKubePullRequest(ctx, ref, true, pr.UpdatedAt, true)
+			var queued bool
+			queued, err = deployer.queueKubePullRequest(ctx, ref, kubePullRedeploy, deployer.githubPullState)
+			if err == nil && !queued {
+				writeOK(w)
+				return
+			}
 		} else {
 			_, err = pool.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID))
 		}
