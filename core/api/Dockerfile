@@ -1,4 +1,4 @@
-FROM moby/buildkit:v0.31.1 AS buildkit
+FROM moby/buildkit:v0.35.1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c AS buildkit
 
 FROM golang:1.27.4-alpine AS build
 RUN apk add --no-cache git ca-certificates
