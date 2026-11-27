@@ -226,6 +226,9 @@ func (d *Deployer) runKubeWebhookWorker(ctx context.Context) {
 		worked, err := d.processKubeWebhook(ctx, d.githubPullState, d.kubeAutoBuildAllowed)
 		if err != nil && ctx.Err() == nil {
 			log.Printf("process Kubernetes GitHub delivery: %v", err)
+			if !errors.Is(err, errInvalidCompose) {
+				d.monitor.report("github_delivery_failed", nil, nil)
+			}
 		}
 		if worked {
 			continue
@@ -285,8 +288,10 @@ func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader,
 			return true, err
 		}
 		if !allowed || err != nil {
-			_, deleteErr := d.pool.Exec(ctx, `DELETE FROM kube_github_deliveries WHERE id=$1`, id)
-			return true, errors.Join(err, deleteErr)
+			if _, deleteErr := d.pool.Exec(ctx, `DELETE FROM kube_github_deliveries WHERE id=$1`, id); deleteErr != nil {
+				return true, deleteErr
+			}
+			return true, err
 		}
 	}
 	observe := read

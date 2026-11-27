@@ -119,7 +119,7 @@ func (n *prNotifier) OnHibernated(ctx context.Context, ref PreviewRef, days int)
 
 func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string, ownerCommandOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
+		body, err := io.ReadAll(maxRequestBody(w, r.Body, maxWebhookBody))
 		if err != nil {
 			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
 			return
