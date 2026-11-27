@@ -5,6 +5,12 @@ StatefulSet with a 10 Gi PVC, and a separate static NGINX landing page in
 `hatch-system`. The API creates preview resources in four preprovisioned
 namespaces, `hatch-preview-1` through `hatch-preview-4`.
 
+Each namespace holds one active preview. The API keeps its queue in PostgreSQL
+and defaults to three concurrent operations. A Kubernetes restart can resume
+queued work. The API Deployment uses `Recreate` and requires one replica.
+Add preview slots and worker-node capacity to host more previews, and size
+BuildKit separately for concurrent builds.
+
 ## Prepare the deployment
 
 1. Copy [the example overlay](overlays/example/) and set the GitHub owner
@@ -39,8 +45,30 @@ namespaces, `hatch-preview-1` through `hatch-preview-4`.
    overlay's `images` field. The base uses the mutable `edge` tag. The landing
    image embeds `VITE_API_URL` at build time. The upstream image defaults to
    `https://api.hatchpr.dev`. For a different API hostname, build the landing
-   Dockerfile with the corresponding `VITE_API_URL`. For GHCR builds in this
-   repository, set the `HATCH_LANDING_API_URL` Actions variable.
+   Dockerfile with the corresponding `VITE_API_URL` and set the `hatch-api-base`
+   meta tag in the static dashboard page. For GHCR builds in this repository,
+   set the `HATCH_LANDING_API_URL` Actions variable.
+
+## Preview compatibility
+
+Use a dedicated builder and restrict `HATCH_ALLOWED_OWNERS` to trusted GitHub
+owners. GitHub App installations by other owners and pull requests from forks
+are skipped. Repositories, build contexts, and Dockerfiles are fetched at the
+PR commit, with `dockerfile` relative to `build`. Kubernetes builds consume a
+GitHub archive and require a Dockerfile that builds from that archive. Set an
+explicit `port` if the Dockerfile relies on variable or inherited `EXPOSE`.
+Set up retention in the preview registry for pushed image tags and cached layers.
+
+## Public HTTPS without Dokploy
+
+Use an ingress controller or an external edge that routes the landing host,
+API host and wildcard preview domain. For Cloudflare Tunnel, run a dedicated
+connector in Kubernetes and point the public hosts at the Kubernetes ingress
+controller's internal Service. Keep the original Host header for routing. If
+the tunnel terminates public TLS and the in-cluster leg uses HTTP, remove the
+system Ingress TLS block and leave `HATCH_KUBE_TLS_SECRET` empty, then configure
+the cluster ingress HTTP entrypoint accordingly. Confirm wildcard DNS and edge
+certificate coverage before using a test hostname. See [Cloudflare Tunnel routing](https://developers.cloudflare.com/tunnel/concepts/routing/).
 
 ## Provision credentials
 

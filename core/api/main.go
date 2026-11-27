@@ -40,6 +40,9 @@ var migrationRepoSecrets string
 //go:embed migrations/006_build_logs.sql
 var migrationBuildLogs string
 
+//go:embed migrations/007_kube_operations.sql
+var migrationKubeOperations string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -87,7 +90,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs, migrationKubeOperations} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
@@ -96,6 +99,20 @@ func main() {
 	deployer, err := NewDeployer(pool, hatchNetwork, hatchDomain, maxConcurrent)
 	if err != nil {
 		log.Fatalf("deployer init: %v", err)
+	}
+	switch runtime := getenv("HATCH_RUNTIME", "docker"); runtime {
+	case "docker":
+	case "kubernetes":
+		deployer.kube, err = newKubeRuntime()
+		if err != nil {
+			log.Fatalf("Kubernetes runtime: %v", err)
+		}
+		deployer.kubeBuilder, err = newKubeBuilder()
+		if err != nil {
+			log.Fatalf("Kubernetes builder: %v", err)
+		}
+	default:
+		log.Fatalf("unknown HATCH_RUNTIME %q", runtime)
 	}
 
 	var appClient *AppClient
@@ -127,6 +144,9 @@ func main() {
 	deployer.StartTTLReaper(rootCtx, pool,
 		time.Duration(ttlHours)*time.Hour,
 		time.Duration(reaperMinutes)*time.Minute)
+	if deployer.kube != nil {
+		deployer.startKubeWorkers(rootCtx, maxConcurrent)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
@@ -140,6 +160,15 @@ func main() {
 	}))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		if rootCtx.Err() != nil || pool.Ping(ctx) != nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 

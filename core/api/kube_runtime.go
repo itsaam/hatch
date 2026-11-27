@@ -23,6 +23,8 @@ const (
 	kubeStopTime    = 2 * time.Minute
 )
 
+var errKubeSlotsFull = errors.New("all kubernetes preview namespaces are claimed")
+
 type kubeRuntime struct {
 	client          *kubeClient
 	namespaces      []string
@@ -197,7 +199,7 @@ func (k *kubeRuntime) claimSlot(ctx context.Context, ref PreviewRef) (*kubeSlot,
 		}
 		return slot, nil
 	}
-	return nil, errors.New("all kubernetes preview namespaces are claimed")
+	return nil, errKubeSlotsFull
 }
 
 func (k *kubeRuntime) deploy(ctx context.Context, ref PreviewRef, spec *ComposeSpec, host string, build func(context.Context, string, *ComposeService) (string, int, error), seed func(context.Context, string) ([]byte, error)) (result error) {
@@ -213,6 +215,13 @@ func (k *kubeRuntime) deploy(ctx context.Context, ref PreviewRef, spec *ComposeS
 	}
 	defer unlock()
 
+	previous, empty, err := k.locate(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if len(previous) == 0 && len(empty) == 0 {
+		return errKubeSlotsFull
+	}
 	plans, err := planKubeServices(ctx, spec, host, build)
 	if err != nil {
 		return err

@@ -6,6 +6,8 @@
 
 Self-hosted preview deployments par pull request — app, base de données et services isolés à chaque PR.
 
+**Installation sur Kubernetes avec Argo CD, ou sur un serveur avec Docker Compose.**
+
 [hatchpr.dev](https://hatchpr.dev) · [Docs](https://hatchpr.dev/docs/) · [GitHub App](https://github.com/apps/hatchpr) · [Demo repo](https://github.com/itsaam/hatch-demo-node)
 
 </div>
@@ -49,7 +51,7 @@ seed:
   sql: ./seed/preview.sql
 ```
 
-Tu pushes une branche, ouvres une PR. Hatch build l'image, démarre le stack dans son propre réseau Docker, attend que les healthchecks passent, expose `pr-<num>-<repo>.hatchpr.dev` en HTTPS, et commente le lien sur la PR. À la fermeture, tout est détruit — containers, volumes, certificat, ligne en base.
+Tu pushes une branche et ouvres une PR. Hatch construit les images, démarre les services dans un environnement isolé, attend les healthchecks et commente le lien HTTPS sur la PR. À la fermeture, Hatch supprime les ressources de la preview et conserve son état dans l'historique.
 
 Chaque preview a sa propre DB vierge, son propre mot de passe (dérivé HMAC), aucune fuite d'une PR à l'autre.
 
@@ -68,14 +70,26 @@ Le [demo repo](https://github.com/itsaam/hatch-demo-node) montre un stack Node +
 ## Architecture
 
 ```
-core/api/            Control plane Go — webhook, deployer, reconciler, bot GitHub
-landing/             Site marketing + docs + dashboard (Vite + React)
-templates/           Templates de démarrage (Next.js, FastAPI, Django, Rails, static)
-security/            Hardening optionnel du socket Docker (proxy + body filter)
-docker-compose.yml   Déploiement du control plane lui-même
+core/api/            API Go — webhooks, cycle de vie des previews, bot GitHub
+cli/                 CLI Go pour générer un .hatch.yml à partir d'un projet
+landing/             Site, documentation et dashboard, servis par Nginx
+security/            Protection optionnelle du socket Docker
+docker-compose.yml   Installation de l'API, du site et de PostgreSQL 16
 ```
 
-Backend Go 1.23 (chi + pgx/v5), PostgreSQL 16, Docker Engine API en direct via socket Unix (pas de SDK), Traefik en reverse proxy (réutilisé si déjà présent sur l'host, ex. Dokploy), GitHub App auth via JWT RS256 + installation tokens.
+L'API vérifie la signature des webhooks GitHub, filtre les propriétaires autorisés et lit le `.hatch.yml` au commit de la PR. PostgreSQL conserve les états de preview, les identifiants de commentaires GitHub, les logs de build et les secrets de dépôt chiffrés. Le dashboard passe par l'API pour consulter les logs ou relancer une preview.
+
+## Installation sur Kubernetes
+
+Argo CD installe l'API, le site, PostgreSQL et les namespaces de preview depuis les manifests Git. Dans Lumovi, l'intégration Argo CD indique la santé et la synchronisation de Hatch. Les événements GitHub alimentent la file d'opérations de Hatch. Quand une PR éligible demande une preview, Hatch construit les images via BuildKit, les publie dans le registre configuré et crée les workloads, Services et Ingress de la PR. Voir le [guide d'installation Kubernetes](./deploy/kubernetes/README.md).
+
+Chaque preview occupe un namespace préprovisionné, avec ses quotas et ses règles réseau. Le déploiement de base ouvre quatre emplacements. Tu peux en ajouter et augmenter la capacité des nœuds Kubernetes et du builder indépendamment. L'API tourne avec une seule réplique et conserve sa file PostgreSQL au redémarrage. Les installations publiques doivent garder la liste des propriétaires GitHub autorisés limitée aux dépôts de confiance. Voir le [guide Kubernetes sur l'isolation des workloads](https://kubernetes.io/docs/concepts/security/multi-tenancy/).
+
+Pour migrer depuis Docker Compose :
+
+1. Sauvegarder PostgreSQL et vérifier la restauration dans la base cible. Récupérer la clé `HATCH_SECRET_KEY` utilisée pour chiffrer les secrets de dépôt, ainsi que la configuration de la GitHub App, via le gestionnaire de secrets. Si l'ancienne instance utilisait le secret webhook comme clé de secours, conserver cette valeur pour déchiffrer les données restaurées.
+2. Valider sur un environnement de test le cycle complet d'une PR, dont le build, le démarrage des dépendances, le seed, la route HTTPS, les logs, la mise à jour GitHub et le nettoyage à la fermeture. Vérifier aussi le traitement des anciens états de preview en base lors du changement de moteur.
+3. Vérifier que l'ancienne instance est arrêtée et effectuer la bascule du routage du site, de l'API et des previews avant de rediriger le webhook GitHub. Garder le volume Compose et la configuration d'origine pour le retour arrière, puis décider comment réconcilier les écritures faites sur la base cible si ce retour est nécessaire.
 
 ## Sécurité
 

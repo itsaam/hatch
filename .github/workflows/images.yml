@@ -12,6 +12,37 @@ permissions:
   contents: read
 
 jobs:
+  api-tests:
+    name: API tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hatch
+          POSTGRES_PASSWORD: hatch-test
+          POSTGRES_DB: hatch_test
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U hatch -d hatch_test"
+          --health-interval 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/api/go.mod
+          cache-dependency-path: core/api/go.sum
+      - name: Run Go tests with PostgreSQL
+        working-directory: core/api
+        env:
+          HATCH_TEST_DATABASE_URL: postgres://hatch:hatch-test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/hatch_test?sslmode=disable
+        run: go test -race ./...
+
   compile:
     name: Compile ${{ matrix.workload }}
     if: github.event_name == 'pull_request'

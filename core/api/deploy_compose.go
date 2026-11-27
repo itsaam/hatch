@@ -97,7 +97,7 @@ type dockerHealthcheck struct {
 }
 
 // deployCompose orchestrates a full stack deploy for a preview.
-func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *ComposeSpec, app *AppClient) error {
+func (d *Deployer) preparePreviewSpec(ctx context.Context, ref PreviewRef, spec *ComposeSpec, host string) {
 	slug := slugify(ref.Repo)
 
 	// Load repo secrets up-front. A DB error here is non-fatal: we log and
@@ -110,13 +110,14 @@ func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *Comp
 	}
 
 	sctx := SubstitutionContext{
-		PR:         ref.PR,
-		SHA:        ref.SHA,
-		Repo:       ref.Repo,
-		Slug:       slug,
-		DBPassword: DeriveDBPassword(webhookSecretFromEnv(), ref.Repo, ref.PR),
-		Domain:     d.domain,
-		Secrets:    secrets,
+		PR:          ref.PR,
+		SHA:         ref.SHA,
+		Repo:        ref.Repo,
+		Slug:        slug,
+		DBPassword:  DeriveDBPassword(webhookSecretFromEnv(), ref.Repo, ref.PR),
+		Domain:      d.domain,
+		PreviewHost: host,
+		Secrets:     secrets,
 	}
 	Substitute(spec, sctx)
 
@@ -139,7 +140,11 @@ func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *Comp
 			}
 		}
 	}
+}
 
+func (d *Deployer) deployCompose(ctx context.Context, ref PreviewRef, spec *ComposeSpec, app *AppClient) error {
+	d.preparePreviewSpec(ctx, ref, spec, "")
+	slug := slugify(ref.Repo)
 	order, err := TopoSortServices(spec)
 	if err != nil {
 		return err
@@ -731,4 +736,3 @@ func (d *Deployer) listStackContainers(ctx context.Context, slug string, pr int)
 	}
 	return out, nil
 }
-

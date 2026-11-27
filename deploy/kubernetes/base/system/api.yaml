@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/name: hatch-api
     spec:
       serviceAccountName: hatch-api
+      terminationGracePeriodSeconds: 100
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -41,8 +42,17 @@ spec:
                 name: hatch-api-env
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 128Mi
+            limits:
+              memory: 512Mi
+              ephemeral-storage: 2Gi
           startupProbe:
             httpGet:
               path: /healthz
@@ -60,6 +70,8 @@ spec:
               port: http
             periodSeconds: 10
           volumeMounts:
+            - name: scratch
+              mountPath: /tmp
             - name: github-app
               mountPath: /var/run/hatch/github
               readOnly: true
@@ -70,6 +82,9 @@ spec:
               mountPath: /var/run/hatch/registry
               readOnly: true
       volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 1Gi
         - name: github-app
           secret:
             secretName: hatch-github-app

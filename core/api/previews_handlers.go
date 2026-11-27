@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -143,7 +144,7 @@ func loadPreviewRef(ctx context.Context, pool *pgxpool.Pool, repo string, pr int
 
 // previewLogsHandler returns logs for a preview. When ?kind=build it pulls
 // the most recent build_logs rows (one per service). Otherwise (kind=runtime
-// or absent) it streams the exposed container's stdout+stderr via Docker.
+// or absent) it fetches logs from the selected preview runtime.
 // If the preview never produced a running container, it falls back to the
 // latest build logs automatically so a failed build can still be inspected.
 func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc {
@@ -155,7 +156,7 @@ func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 
-		_, found, err := loadPreviewRef(ctx, pool, repo, pr)
+		ref, found, err := loadPreviewRef(ctx, pool, repo, pr)
 		if err != nil {
 			log.Printf("logs load %s#%d: %v", repo, pr, err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "db error"})
@@ -169,24 +170,15 @@ func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc
 		kind := r.URL.Query().Get("kind")
 
 		if kind != "build" {
-			container, err := deployer.exposedContainerName(ctx, repo, pr)
+			logs, available, err := deployer.previewRuntimeLogs(ctx, ref, 500)
 			if err != nil {
-				log.Printf("locate exposed container %s#%d: %v", repo, pr, err)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "docker error"})
+				log.Printf("runtime logs %s#%d: %v", repo, pr, err)
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "runtime error"})
 				return
 			}
-			if container != "" {
-				logs, err := deployer.containerLogs(ctx, container, 500)
-				if err == nil {
-					writeJSON(w, http.StatusOK, map[string]any{"kind": "runtime", "logs": logs})
-					return
-				}
-				if err != errContainerNotFound {
-					log.Printf("logs %s: %v", container, err)
-					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "docker error"})
-					return
-				}
-				// container vanished — fall through to build logs
+			if available {
+				writeJSON(w, http.StatusOK, map[string]any{"kind": "runtime", "logs": logs})
+				return
 			}
 			// No runtime container — caller implicitly wanted runtime but we
 			// only have build output. Return build logs (still useful) with
@@ -303,18 +295,12 @@ func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handl
 			cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer cancel()
 
-			container, cerr := deployer.exposedContainerName(cctx, repo, pr)
-			if cerr != nil {
-				log.Printf("logs-stream locate %s#%d: %v", repo, pr, cerr)
+			logs, available, err := deployer.previewRuntimeLogs(cctx, PreviewRef{Repo: repo, PR: pr}, 500)
+			if err != nil {
+				log.Printf("logs stream %s#%d: %v", repo, pr, err)
 			}
-			if container != "" {
-				logs, err := deployer.containerLogs(cctx, container, 500)
-				if err == nil {
-					return false, send("", map[string]any{"kind": "runtime", "logs": logs})
-				}
-				if err != errContainerNotFound {
-					log.Printf("logs-stream %s: %v", container, err)
-				}
+			if available {
+				return false, send("", map[string]any{"kind": "runtime", "logs": logs})
 			}
 
 			rows, err := pool.Query(cctx, `
@@ -359,7 +345,7 @@ func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handl
 			if len(out) == 0 {
 				return false, send("", map[string]any{"kind": "build", "services": out})
 			}
-			return allTerminal && container == "", send("", map[string]any{"kind": "build", "services": out})
+			return allTerminal && err == nil, send("", map[string]any{"kind": "build", "services": out})
 		}
 
 		if _, ok := emit(); !ok {
@@ -448,6 +434,15 @@ func previewDestroyHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerF
 			return
 		}
 
+		if deployer.kube != nil {
+			if !deployer.enqueueKubeOperation(ref, "delete") {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "cleanup unavailable, retry later"})
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+			return
+		}
+
 		// Destroy owns its own 1-minute context internally.
 		deployer.Destroy(ref)
 
@@ -464,6 +459,25 @@ func previewDestroyHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerF
 
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
+}
+
+func (d *Deployer) previewRuntimeLogs(ctx context.Context, ref PreviewRef, tail int) (string, bool, error) {
+	if d.kube != nil {
+		logs, err := d.kube.logs(ctx, ref, tail)
+		if errors.Is(err, errKubeLogsNotFound) {
+			return "", false, nil
+		}
+		return logs, err == nil, err
+	}
+	container, err := d.exposedContainerName(ctx, ref.Repo, ref.PR)
+	if err != nil || container == "" {
+		return "", false, err
+	}
+	logs, err := d.containerLogs(ctx, container, tail)
+	if err == errContainerNotFound {
+		return "", false, nil
+	}
+	return logs, err == nil, err
 }
 
 // --- Docker helpers ---------------------------------------------------------

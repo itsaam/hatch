@@ -255,12 +255,13 @@ func FallbackCompose() *ComposeSpec {
 
 // SubstitutionContext holds the values used for ${...} substitution.
 type SubstitutionContext struct {
-	PR         int
-	SHA        string
-	Repo       string // raw "owner/repo"
-	Slug       string // sanitized slug
-	DBPassword string
-	Domain     string // e.g. "hatchpr.dev", used to derive PREVIEW_URL / PREVIEW_HOST
+	PR          int
+	SHA         string
+	Repo        string // raw "owner/repo"
+	Slug        string // sanitized slug
+	DBPassword  string
+	Domain      string // e.g. "hatchpr.dev", used to derive PREVIEW_URL / PREVIEW_HOST
+	PreviewHost string // the canonical runtime hostname, when already assigned
 	// Secrets maps secret-name -> plaintext. Referenced via ${SECRET_<NAME>}.
 	// Unknown secret names are left untouched (same policy as unknown ${VAR}).
 	Secrets map[string]string
@@ -319,16 +320,18 @@ func substituteString(s string, sctx SubstitutionContext) string {
 			return sctx.Slug
 		case "DB_PASSWORD":
 			return sctx.DBPassword
-		case "PREVIEW_HOST":
-			if sctx.Domain == "" {
+		case "PREVIEW_HOST", "PREVIEW_URL":
+			host := sctx.PreviewHost
+			if host == "" && sctx.Domain != "" {
+				host = stackHost(sctx.Slug, sctx.PR, sctx.Domain)
+			}
+			if host == "" {
 				return match
 			}
-			return fmt.Sprintf("pr-%d-%s.%s", sctx.PR, sctx.Slug, sctx.Domain)
-		case "PREVIEW_URL":
-			if sctx.Domain == "" {
-				return match
+			if name == "PREVIEW_URL" {
+				return "https://" + host
 			}
-			return fmt.Sprintf("https://pr-%d-%s.%s", sctx.PR, sctx.Slug, sctx.Domain)
+			return host
 		default:
 			return match
 		}
