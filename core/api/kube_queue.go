@@ -18,7 +18,6 @@ type kubeOperation struct {
 	kind       string
 	expiryDays int
 	ref        PreviewRef
-	updatedAt  time.Time
 }
 
 func (d *Deployer) enqueueKubeOperation(ref PreviewRef, operation string) bool {
@@ -115,8 +114,8 @@ func (d *Deployer) claimKubeOperation(ctx context.Context) (kubeOperation, error
 	FROM next, previews AS p WHERE op.id=next.id
 		AND p.repo_full_name=op.repo_full_name AND p.pr_number=op.pr_number
 	RETURNING op.id, op.operation, op.expiry_days, p.repo_full_name, p.pr_number, p.branch, p.commit_sha,
-		COALESCE(p.installation_id, 0), COALESCE(p.comment_id, 0), p.updated_at`).Scan(
-		&job.id, &job.kind, &job.expiryDays, &job.ref.Repo, &job.ref.PR, &job.ref.Branch, &job.ref.SHA, &job.ref.InstallationID, &job.ref.CommentID, &job.updatedAt)
+		COALESCE(p.installation_id, 0), COALESCE(p.comment_id, 0)`).Scan(
+		&job.id, &job.kind, &job.expiryDays, &job.ref.Repo, &job.ref.PR, &job.ref.Branch, &job.ref.SHA, &job.ref.InstallationID, &job.ref.CommentID)
 	return job, err
 }
 
@@ -155,6 +154,9 @@ func (d *Deployer) runKubeOperation(ctx context.Context, job kubeOperation) {
 	if job.kind == "expire" {
 		status = "expired"
 	}
+	if job.kind == "failed_cleanup" {
+		status = "failed"
+	}
 	d.completeKubeOperation(ctx, job, status, "")
 }
 
@@ -166,11 +168,19 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 	}
 	deployCtx, cancel := context.WithTimeout(ctx, 25*time.Minute)
 	defer cancel()
+	go d.cancelSupersededDeploy(deployCtx, job.id, cancel)
+	if owner, repo, ok := splitRepo(ref.Repo); ok && d.app != nil && ref.InstallationID != 0 {
+		commentCtx, stop := context.WithTimeout(deployCtx, 5*time.Second)
+		if err := ensureMentionStickyComment(commentCtx, d.pool, d.app, ref.InstallationID, owner, repo, ref.PR, ref.SHA); err != nil {
+			log.Printf("ensure Kubernetes preview comment %s#%d: %v", ref.Repo, ref.PR, err)
+		}
+		stop()
+	}
 	host := kubePreviewHost(ref, d.domain)
 	spec, _, err := loadComposeForRef(deployCtx, d.httpExt, d.app, ref.InstallationID, ref.Repo, ref.SHA)
 	if err == nil {
 		d.preparePreviewSpec(deployCtx, ref, spec, host)
-		err = d.deployKubeSpec(deployCtx, ref, spec, host)
+		err = d.deployKubeSpec(deployCtx, job, spec, host)
 	}
 	if ctx.Err() != nil {
 		d.releaseKubeOperation(job, 0)
@@ -183,17 +193,10 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 	}
 	if err != nil {
 		log.Printf("deploy Kubernetes preview %s#%d: %v", ref.Repo, ref.PR, scrubToken(err))
-		cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 90*time.Second)
-		cleanupRef := ref
-		cleanupRef.SHA = ""
-		cleanupErr := d.kube.destroy(cleanupCtx, cleanupRef)
-		cleanupCancel()
-		if cleanupErr != nil {
-			log.Printf("clean up failed Kubernetes preview %s#%d: %v", ref.Repo, ref.PR, cleanupErr)
+		if _, err := d.pool.Exec(ctx, `UPDATE kube_operations SET operation='failed_cleanup', available_at=NOW() WHERE id=$1`, job.id); err != nil {
+			log.Printf("queue Kubernetes cleanup %s#%d: %v", ref.Repo, ref.PR, err)
 			d.releaseKubeOperation(job, 30)
-			return
 		}
-		d.completeKubeOperation(ctx, job, "failed", "")
 		return
 	}
 	publicURL := ""
@@ -203,7 +206,28 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 	d.completeKubeOperation(ctx, job, "running", publicURL)
 }
 
-func (d *Deployer) deployKubeSpec(ctx context.Context, ref PreviewRef, spec *ComposeSpec, host string) error {
+func (d *Deployer) cancelSupersededDeploy(ctx context.Context, id int64, cancel context.CancelFunc) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkCtx, stopCheck := context.WithTimeout(ctx, 3*time.Second)
+			var current bool
+			err := d.pool.QueryRow(checkCtx, `SELECT EXISTS(SELECT 1 FROM kube_operations WHERE id=$1)`, id).Scan(&current)
+			stopCheck()
+			if err == nil && !current {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func (d *Deployer) deployKubeSpec(ctx context.Context, job kubeOperation, spec *ComposeSpec, host string) error {
+	ref := job.ref
 	var source string
 	defer func() {
 		if source != "" {
@@ -224,6 +248,25 @@ func (d *Deployer) deployKubeSpec(ctx context.Context, ref PreviewRef, spec *Com
 		return d.buildKubeImage(ctx, ref, name, svc, source)
 	}, func(ctx context.Context, sqlPath string) ([]byte, error) {
 		return fetchRepoFile(ctx, d.httpExt, d.app, ref.InstallationID, ref.Repo, sqlPath, ref.SHA)
+	}, func(ctx context.Context, publish func(context.Context) error) error {
+		return d.publishCurrentKubeOperation(ctx, job, publish)
+	})
+}
+
+func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOperation, publish func(context.Context) error) error {
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		var sha string
+		if err := tx.QueryRow(ctx, `SELECT commit_sha FROM previews WHERE repo_full_name=$1 AND pr_number=$2 FOR UPDATE`, job.ref.Repo, job.ref.PR).Scan(&sha); err != nil {
+			return err
+		}
+		var current bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM kube_operations WHERE id=$1)`, job.id).Scan(&current); err != nil {
+			return err
+		}
+		if !current || sha != job.ref.SHA {
+			return errors.New("preview operation was superseded before publication")
+		}
+		return publish(ctx)
 	})
 }
 
@@ -269,7 +312,7 @@ func (d *Deployer) completeKubeOperation(ctx context.Context, job kubeOperation,
 			return nil
 		}
 		if job.kind == "delete" {
-			tag, err = tx.Exec(ctx, `DELETE FROM previews WHERE repo_full_name=$1 AND pr_number=$2 AND updated_at=$3`, ref.Repo, ref.PR, job.updatedAt)
+			tag, err = tx.Exec(ctx, `DELETE FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR)
 			applied = tag.RowsAffected() > 0
 			return err
 		}

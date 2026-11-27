@@ -202,7 +202,7 @@ func (k *kubeRuntime) claimSlot(ctx context.Context, ref PreviewRef) (*kubeSlot,
 	return nil, errKubeSlotsFull
 }
 
-func (k *kubeRuntime) deploy(ctx context.Context, ref PreviewRef, spec *ComposeSpec, host string, build func(context.Context, string, *ComposeService) (string, int, error), seed func(context.Context, string) ([]byte, error)) (result error) {
+func (k *kubeRuntime) deploy(ctx context.Context, ref PreviewRef, spec *ComposeSpec, host string, build func(context.Context, string, *ComposeService) (string, int, error), seed func(context.Context, string) ([]byte, error), guard func(context.Context, func(context.Context) error) error) (result error) {
 	if err := validateKubeRef(ref); err != nil {
 		return err
 	}
@@ -251,6 +251,9 @@ func (k *kubeRuntime) deploy(ctx context.Context, ref PreviewRef, spec *ComposeS
 		}
 	}
 	if exposed := ExposedService(spec); exposed != "" {
+		if guard != nil {
+			return guard(ctx, func(ctx context.Context) error { return k.createIngress(ctx, slot, host, exposed) })
+		}
 		return k.createIngress(ctx, slot, host, exposed)
 	}
 	return nil

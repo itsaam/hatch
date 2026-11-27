@@ -169,11 +169,15 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		// Acknowledge so the user sees feedback immediately, then ensure the
 		// sticky comment exists so OnStatusChange has something to update.
 		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
+		if deployer.kube != nil {
+			writeOK(w)
+			return
+		}
 		if err := ensureMentionStickyComment(ctx, pool, app, ev.Installation.ID, owner, repo, ev.Issue.Number, pr.Head.SHA); err != nil {
 			log.Printf("issue_comment: sticky comment %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
 		}
 		ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
-		if deployer.kube == nil && !deployer.DeployAsync(ref) {
+		if !deployer.DeployAsync(ref) {
 			http.Error(w, "deploy queue full", http.StatusServiceUnavailable)
 			return
 		}

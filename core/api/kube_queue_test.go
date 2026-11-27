@@ -112,6 +112,15 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if err != nil || reopened.kind != "deploy" || reopened.id == closing.id {
 		t.Fatalf("reopen with same SHA = %+v, %v", reopened, err)
 	}
+	if err := d.publishCurrentKubeOperation(ctx, closing, func(context.Context) error {
+		t.Fatal("a superseded operation reached ingress publication")
+		return nil
+	}); err == nil {
+		t.Fatal("expected stale publication to fail")
+	}
+	if err := d.publishCurrentKubeOperation(ctx, reopened, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("current publication was rejected: %v", err)
+	}
 	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
 	if err := d.queueKubeWebhook(ctx, ref, false); err == nil {
 		t.Fatal("expected the queue write to fail")

@@ -439,7 +439,7 @@ func previewDestroyHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerF
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "cleanup unavailable, retry later"})
 				return
 			}
-			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true, "queued": true})
 			return
 		}
 

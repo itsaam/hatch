@@ -227,11 +227,6 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
 				}
-				if app != nil && ref.InstallationID != 0 {
-					if err := ensurePRComment(ctx, pool, app, ev); err != nil {
-						log.Printf("ensure pr comment %s#%d: %v", ref.Repo, ref.PR, err)
-					}
-				}
 				writeOK(w)
 				return
 			}

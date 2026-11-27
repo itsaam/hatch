@@ -47,7 +47,7 @@ func TestKubeClusterPreview(t *testing.T) {
 		return "", 0, fmt.Errorf("image-only fixture tried to build a Dockerfile")
 	}, func(context.Context, string) ([]byte, error) {
 		return []byte("CREATE TABLE hatch_fixture (id integer);"), nil
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := kube.exists(ctx, ref); err != nil || !ok {

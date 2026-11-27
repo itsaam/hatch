@@ -201,7 +201,7 @@ seed:
 			t.Errorf("unexpected seed path %s", path)
 		}
 		return []byte("SELECT 1;"), nil
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestKubeRuntimeReconcilesLateClaim(t *testing.T) {
 	spec := &ComposeSpec{Version: 1, Services: map[string]*ComposeService{
 		"worker": {Image: "alpine:3.22"},
 	}}
-	if err := runtime.deploy(t.Context(), ref, spec, "", nil, nil); err != nil {
+	if err := runtime.deploy(t.Context(), ref, spec, "", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	// An earlier claim POST was interrupted, then arrived after the retry
@@ -340,7 +340,7 @@ func TestKubeRuntimeKeepsClaimAfterUnknownCreate(t *testing.T) {
 	spec := &ComposeSpec{Version: 1, Services: map[string]*ComposeService{
 		"worker": {Image: "alpine:3.22"},
 	}}
-	err := runtime.deploy(t.Context(), ref, spec, "", nil, nil)
+	err := runtime.deploy(t.Context(), ref, spec, "", nil, nil, nil)
 	if err == nil || strings.Contains(err.Error(), "private server diagnostic") {
 		t.Fatalf("expected sanitized deployment error, got %v", err)
 	}
