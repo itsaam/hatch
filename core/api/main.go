@@ -304,6 +304,8 @@ func subscribeHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		)
 		if err != nil {
 			log.Printf("insert failed: %v", err)
+			http.Error(w, "subscription unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		writeOK(w)
 	}
