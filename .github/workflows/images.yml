@@ -40,13 +40,51 @@ jobs:
       - name: Run Go tests with PostgreSQL
         working-directory: core/api
         env:
-          HATCH_TEST_DATABASE_URL: postgres://hatch:hatch-test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/hatch_test?sslmode=disable
+          HATCH_TEST_DATABASE_URL: postgres://hatch:hatch-test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/hatch_test?sslmode=disable
         run: go test -race ./...
+
+  cli-tests:
+    name: CLI tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.27.4'
+          cache-dependency-path: cli/go.sum
+      - name: Run Go tests and vet
+        working-directory: cli
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Verify CLI output modes
+        working-directory: cli
+        run: |
+          tmp=$(mktemp -d)
+          go build -o "$tmp/hatch" .
+          cd "$tmp"
+          printf '%s\n' 'FROM scratch' 'EXPOSE 3000' > Dockerfile
+          ./hatch init --dry-run --verbose > config.yml
+          ruby -ryaml -e '
+            config = YAML.safe_load_file("config.yml")
+            web = config.fetch("services").fetch("web")
+            abort "Unexpected preview configuration" unless config["version"] == 1 &&
+              web["build"] == "." && web["expose"] == true
+          '
+          ./hatch init --ai > prompt.txt
+          grep -F 'Create a HatchPR configuration for this repository' prompt.txt
+          test ! -e .hatch.yml
 
   compile:
     name: Compile ${{ matrix.workload }}
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      api_verified: ${{ steps.api-smoke.outputs.verified }}
+      landing_verified: ${{ steps.landing-smoke.outputs.verified }}
     strategy:
       matrix:
         include:
@@ -81,21 +119,49 @@ jobs:
           cd "$tmp"
           ./trivy image --input image.tar --scanners vuln --exit-code 0 --timeout 5m
       - name: Verify the BuildKit client in the API image
+        id: api-smoke
         if: matrix.workload == 'api'
-        run: docker run --rm --entrypoint /usr/bin/buildctl hatch-api:test --version
+        run: |
+          docker run --rm --entrypoint /usr/bin/buildctl hatch-api:test --version
+          echo "verified=true" >> "$GITHUB_OUTPUT"
       - name: Verify the dashboard uses the configured API
+        id: landing-smoke
         if: matrix.workload == 'landing'
         run: |
           container=$(docker run -d -e HATCH_PUBLIC_API_URL=https://api.hatch.example hatch-landing:test)
           trap 'docker rm -f "$container"' EXIT
           for _ in $(seq 1 20); do
             if docker exec "$container" wget -qO- http://127.0.0.1/app/ | grep -F '<meta name="hatch-api-base" content="https://api.hatch.example">'; then
+              echo "verified=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             sleep 1
           done
           docker logs "$container"
           exit 1
+
+  hatch-ci:
+    name: Hatch CI
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: [api-tests, cli-tests, compile]
+    permissions: {}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require API, CLI, and image checks
+        env:
+          API_RESULT: ${{ needs.api-tests.result }}
+          CLI_RESULT: ${{ needs.cli-tests.result }}
+          IMAGE_RESULT: ${{ needs.compile.result }}
+          API_IMAGE_VERIFIED: ${{ needs.compile.outputs.api_verified }}
+          LANDING_IMAGE_VERIFIED: ${{ needs.compile.outputs.landing_verified }}
+        run: |
+          printf 'API: %s\nCLI: %s\nImages: %s\n' "$API_RESULT" "$CLI_RESULT" "$IMAGE_RESULT"
+          printf 'API image verified: %s\nLanding image verified: %s\n' "$API_IMAGE_VERIFIED" "$LANDING_IMAGE_VERIFIED"
+          test "$API_RESULT" = success &&
+            test "$CLI_RESULT" = success &&
+            test "$IMAGE_RESULT" = success &&
+            test "$API_IMAGE_VERIFIED" = true &&
+            test "$LANDING_IMAGE_VERIFIED" = true
 
   publish:
     name: Publish ${{ matrix.workload }}
