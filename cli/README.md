@@ -37,6 +37,7 @@ GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/hatch-darwin-arm64 .
 cd your-repo
 hatch init                 # detect stack + write .hatch.yml
 hatch init --dry-run       # print only YAML to stdout, don't write a file
+hatch init --ai            # print a prompt to paste into a coding agent
 hatch init --force         # overwrite an existing .hatch.yml
 hatch init --output foo.yml
 hatch init --verbose
@@ -46,8 +47,17 @@ Review the generated configuration before committing it. Build tools can pipe
 `--dry-run` into a YAML parser. Warnings and verbose output go to stderr.
 Open a PR and comment `@hatchpr preview` on its own to request a preview.
 
-If you use release `v0.1.4`, build from source for machine-readable dry runs.
-That release includes progress text on stdout.
+If you use release `v0.1.4`, build from source for `--ai` or machine-readable
+dry runs. That release includes progress text on dry-run stdout.
+
+## Generate a config with a coding agent
+
+Run `hatch init --ai` and paste the output into a coding agent that has local
+access to your repository. The prompt asks the agent to inspect your stack and
+create or review `.hatch.yml`. Hatch prints the prompt without reading project
+files, making a network request, or writing a config. The prompt asks the
+agent to use secret placeholders. Review its proposed changes before committing.
+
 
 ## Supported stacks
 

@@ -64,6 +64,7 @@ Usage:
 
 Flags:
   --dry-run         print generated YAML to stdout, don't write
+  --ai              print a prompt for a coding agent to create .hatch.yml
   --force           overwrite an existing .hatch.yml
   --output <path>   output path (default: .hatch.yml)
   --verbose         print detection details (stderr for dry runs)
@@ -74,6 +75,7 @@ Flags:
 func runInit(argv []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	dryRun := fs.Bool("dry-run", false, "print YAML to stdout")
+	ai := fs.Bool("ai", false, "print a prompt for a coding agent")
 	force := fs.Bool("force", false, "overwrite existing .hatch.yml")
 	output := fs.String("output", ".hatch.yml", "output path")
 	verbose := fs.Bool("verbose", false, "verbose logs")
@@ -81,6 +83,14 @@ func runInit(argv []string) error {
 	yes := fs.Bool("yes", false, "skip confirmation prompt")
 	fs.BoolVar(yes, "y", false, "skip confirmation prompt (short)")
 	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+
+	if *ai {
+		if *dryRun {
+			return fmt.Errorf("--ai and --dry-run are mutually exclusive")
+		}
+		_, err := fmt.Fprint(os.Stdout, aiInitPrompt)
 		return err
 	}
 
