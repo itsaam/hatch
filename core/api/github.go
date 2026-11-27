@@ -37,8 +37,9 @@ type prEvent struct {
 	Action      string `json:"action"`
 	Number      int    `json:"number"`
 	PullRequest struct {
-		HTMLURL string `json:"html_url"`
-		Head    struct {
+		HTMLURL   string    `json:"html_url"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Head      struct {
 			Ref  string `json:"ref"`
 			SHA  string `json:"sha"`
 			Repo struct {
@@ -222,7 +223,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			}
 
 			if deployer.kube != nil {
-				if err := deployer.queueKubeWebhook(ctx, ref, true); err != nil {
+				if err := deployer.queueKubePullRequest(ctx, ref, true, ev.PullRequest.UpdatedAt); err != nil {
 					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -246,7 +247,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		case "closed":
 			if deployer.kube != nil {
-				if err := deployer.queueKubeWebhook(ctx, ref, false); err != nil {
+				if err := deployer.queueKubePullRequest(ctx, ref, false, ev.PullRequest.UpdatedAt); err != nil {
 					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return

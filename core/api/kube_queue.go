@@ -28,7 +28,7 @@ func (d *Deployer) enqueueKubeOperation(ref PreviewRef, operation string) bool {
 		if err := tx.QueryRow(ctx, `SELECT commit_sha FROM previews WHERE repo_full_name=$1 AND pr_number=$2 FOR UPDATE`, ref.Repo, ref.PR).Scan(&sha); err != nil {
 			return err
 		}
-		if sha != ref.SHA {
+		if operation != "close" && sha != ref.SHA {
 			return errors.New("preview changed before the operation was queued")
 		}
 		return enqueueKubeTx(ctx, tx, ref, operation)
@@ -48,19 +48,43 @@ func enqueueKubeTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, operation str
 
 func (d *Deployer) queueKubeWebhook(ctx context.Context, ref PreviewRef, deploy bool) error {
 	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		if deploy {
-			if _, err := tx.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID)); err != nil {
-				return err
-			}
-			return enqueueKubeTx(ctx, tx, ref, "deploy")
-		}
-		tag, err := tx.Exec(ctx, `UPDATE previews SET status='closed', updated_at=NOW()
-			WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR)
+		return queueKubePreviewTx(ctx, tx, ref, deploy)
+	})
+}
+
+func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, deploy bool, updatedAt time.Time) error {
+	if updatedAt.IsZero() {
+		return errors.New("GitHub pull request update time is missing")
+	}
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		// GitHub timestamps have one-second resolution. When conflicting deliveries
+		// share a timestamp, keep the closure rather than exposing a stale preview.
+		tag, err := tx.Exec(ctx, `INSERT INTO kube_pull_request_events (repo_full_name, pr_number, event_at, closed)
+			VALUES ($1,$2,$3,$4) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
+			SET event_at=EXCLUDED.event_at, closed=EXCLUDED.closed
+			WHERE EXCLUDED.event_at > kube_pull_request_events.event_at OR
+			(EXCLUDED.event_at = kube_pull_request_events.event_at AND EXCLUDED.closed AND NOT kube_pull_request_events.closed)`,
+			ref.Repo, ref.PR, updatedAt, !deploy)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return enqueueKubeTx(ctx, tx, ref, "close")
+		return queueKubePreviewTx(ctx, tx, ref, deploy)
 	})
+}
+
+func queueKubePreviewTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, deploy bool) error {
+	if deploy {
+		if _, err := tx.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID)); err != nil {
+			return err
+		}
+		return enqueueKubeTx(ctx, tx, ref, "deploy")
+	}
+	tag, err := tx.Exec(ctx, `UPDATE previews SET status='closed', updated_at=NOW()
+		WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	return enqueueKubeTx(ctx, tx, ref, "close")
 }
 
 func (d *Deployer) enqueueKubeExpiry(ctx context.Context, ref PreviewRef, days int) error {
@@ -254,20 +278,25 @@ func (d *Deployer) deployKubeSpec(ctx context.Context, job kubeOperation, spec *
 }
 
 func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOperation, publish func(context.Context) error) error {
-	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		var sha string
-		if err := tx.QueryRow(ctx, `SELECT commit_sha FROM previews WHERE repo_full_name=$1 AND pr_number=$2 FOR UPDATE`, job.ref.Repo, job.ref.PR).Scan(&sha); err != nil {
-			return err
-		}
-		var current bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM kube_operations WHERE id=$1)`, job.id).Scan(&current); err != nil {
-			return err
-		}
-		if !current || sha != job.ref.SHA {
-			return errors.New("preview operation was superseded before publication")
-		}
-		return publish(ctx)
-	})
+	if err := d.checkKubePublication(ctx, job); err != nil {
+		return err
+	}
+	if err := publish(ctx); err != nil {
+		return err
+	}
+	// A webhook may replace the intent while Kubernetes handles the request.
+	// Let the worker tear down the superseded slot before releasing its PR lock.
+	return d.checkKubePublication(ctx, job)
+}
+
+func (d *Deployer) checkKubePublication(ctx context.Context, job kubeOperation) error {
+	var current bool
+	err := d.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM kube_operations op
+		JOIN previews p USING (repo_full_name, pr_number) WHERE op.id=$1 AND p.commit_sha=$2)`, job.id, job.ref.SHA).Scan(&current)
+	if err == nil && !current {
+		err = errors.New("preview operation was superseded during publication")
+	}
+	return err
 }
 
 func kubePreviewHost(ref PreviewRef, domain string) string {

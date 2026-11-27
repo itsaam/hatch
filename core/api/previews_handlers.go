@@ -170,7 +170,7 @@ func previewLogsHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc
 		kind := r.URL.Query().Get("kind")
 
 		if kind != "build" {
-			logs, available, err := deployer.previewRuntimeLogs(ctx, ref, 500)
+			logs, available, _, err := deployer.previewRuntimeLogs(ctx, ref, 500)
 			if err != nil {
 				log.Printf("runtime logs %s#%d: %v", repo, pr, err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "runtime error"})
@@ -295,9 +295,9 @@ func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handl
 			cctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer cancel()
 
-			logs, available, err := deployer.previewRuntimeLogs(cctx, PreviewRef{Repo: repo, PR: pr}, 500)
-			if err != nil {
-				log.Printf("logs stream %s#%d: %v", repo, pr, err)
+			logs, available, active, runtimeErr := deployer.previewRuntimeLogs(cctx, PreviewRef{Repo: repo, PR: pr}, 500)
+			if runtimeErr != nil {
+				log.Printf("logs stream %s#%d: %v", repo, pr, runtimeErr)
 			}
 			if available {
 				return false, send("", map[string]any{"kind": "runtime", "logs": logs})
@@ -345,7 +345,7 @@ func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handl
 			if len(out) == 0 {
 				return false, send("", map[string]any{"kind": "build", "services": out})
 			}
-			return allTerminal && err == nil, send("", map[string]any{"kind": "build", "services": out})
+			return allTerminal && !active && runtimeErr == nil, send("", map[string]any{"kind": "build", "services": out})
 		}
 
 		if _, ok := emit(); !ok {
@@ -461,23 +461,24 @@ func previewDestroyHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerF
 	}
 }
 
-func (d *Deployer) previewRuntimeLogs(ctx context.Context, ref PreviewRef, tail int) (string, bool, error) {
+func (d *Deployer) previewRuntimeLogs(ctx context.Context, ref PreviewRef, tail int) (logs string, available, active bool, err error) {
 	if d.kube != nil {
 		logs, err := d.kube.logs(ctx, ref, tail)
 		if errors.Is(err, errKubeLogsNotFound) {
-			return "", false, nil
+			active, err := d.kube.exists(ctx, ref)
+			return "", false, active, err
 		}
-		return logs, err == nil, err
+		return logs, err == nil, true, err
 	}
 	container, err := d.exposedContainerName(ctx, ref.Repo, ref.PR)
 	if err != nil || container == "" {
-		return "", false, err
+		return "", false, false, err
 	}
-	logs, err := d.containerLogs(ctx, container, tail)
+	logs, err = d.containerLogs(ctx, container, tail)
 	if err == errContainerNotFound {
-		return "", false, nil
+		return "", false, true, nil
 	}
-	return logs, err == nil, err
+	return logs, err == nil, true, err
 }
 
 // --- Docker helpers ---------------------------------------------------------

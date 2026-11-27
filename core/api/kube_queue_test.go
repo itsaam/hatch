@@ -50,7 +50,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations} {
+	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder} {
 		mustExec(pool, migration)
 	}
 	d, err := NewDeployer(pool, "unused", "hatch.example.org", 1)
@@ -120,6 +120,29 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	}
 	if err := d.publishCurrentKubeOperation(ctx, reopened, func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("current publication was rejected: %v", err)
+	}
+	eventAt := time.Now().UTC().Truncate(time.Second)
+	if err := d.publishCurrentKubeOperation(ctx, reopened, func(ctx context.Context) error {
+		return d.queueKubePullRequest(ctx, ref, false, eventAt)
+	}); err == nil {
+		t.Fatal("publication did not notice a concurrent close")
+	}
+	for _, stale := range []time.Time{eventAt.Add(-time.Second), eventAt} {
+		if err := d.queueKubePullRequest(ctx, ref, true, stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staleRef := ref
+	staleRef.SHA = strings.Repeat("c", 40)
+	if !d.enqueueKubeOperation(staleRef, "close") {
+		t.Fatal("stop command rejected a preview from an older commit")
+	}
+	latest, err := d.claimKubeOperation(ctx)
+	if err != nil || latest.kind != "close" {
+		t.Fatalf("stale delivery overrode closure: %+v, %v", latest, err)
+	}
+	if err := d.queueKubePullRequest(ctx, ref, true, eventAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
 	}
 	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
 	if err := d.queueKubeWebhook(ctx, ref, false); err == nil {

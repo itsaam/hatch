@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hatch-api-ingress
+  namespace: hatch-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: hatch-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+              app.kubernetes.io/instance: traefik-kubernetes-ingress-system
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -82,6 +82,10 @@ with a redirect at the edge. Before syncing, set the real builder address and
 server name through `hatch-api-env`, configure the registry credentials, and
 pin the published images by digest in the GitOps configuration. Check the
 webhook, public TLS and preview lifecycle before moving the production DNS.
+The overlay restricts access to the API pods to Traefik and trusts Forwarded
+For hops from Sunny's current pod subnet and Cloudflare connector. Update the
+trusted ranges when adding ingress nodes or replacing the connector. Verify
+per-client request limits through the ingress before cutover.
 
 ## Provision credentials
 
