@@ -360,7 +360,7 @@ func (k *kubeRuntime) slotLogs(ctx context.Context, slot *kubeSlot, tail int) (s
 			"container": {service}, "tailLines": {strconv.Itoa(tail)}, "limitBytes": {strconv.Itoa(maxLogBytes)},
 		}
 		var body string
-		err := k.client.request(ctx, http.MethodGet, kubePods.path(slot.namespace, pod.Name, "log"), q, "text/plain", nil, &body, maxLogBytes)
+		err := k.client.request(ctx, http.MethodGet, kubePods.path(slot.namespace, pod.Name, "log"), q, "*/*", nil, &body, maxLogBytes)
 		if kubeHTTPStatus(err, http.StatusNotFound) || kubeHTTPStatus(err, http.StatusBadRequest) {
 			continue
 		}

@@ -98,6 +98,9 @@ func (a *kubeTestAPI) serve(r *http.Request) (*http.Response, error) {
 
 	case http.MethodGet:
 		if strings.HasSuffix(p, "/log") {
+			if r.Header.Get("Accept") != "*/*" {
+				return reply(http.StatusNotAcceptable, nil)
+			}
 			if a.logStatus != 0 {
 				return reply(a.logStatus, "private server diagnostic")
 			}
