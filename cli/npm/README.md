@@ -20,9 +20,13 @@ hatch init
 ```sh
 cd your-repo
 hatch init                 # detect stack + write .hatch.yml
-hatch init --dry-run       # print to stdout, don't write
+hatch init --dry-run       # print YAML to stdout, don't write
+hatch init --ai            # print a setup prompt for a coding agent
 hatch init --force         # overwrite an existing .hatch.yml
 ```
+
+Run `npx @hatchpr/cli init --ai` to get a prompt for a coding agent with
+local access to your repository.
 
 Review the generated `.hatch.yml`, then open a PR and comment
 `@hatchpr preview` on its own. See the [configuration reference](https://hatchpr.dev/docs/#config).
