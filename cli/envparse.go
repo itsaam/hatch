@@ -87,6 +87,9 @@ func classifyEnv(key, val string) EnvEntry {
 	if envPGURL.MatchString(val) || (upper == "DATABASE_URL" && val == "") {
 		return EnvEntry{Key: key, Value: previewPostgresURL}
 	}
+	if upper == "DATABASE_URL" && strings.HasPrefix(val, "file:") {
+		return EnvEntry{Key: key, Value: val}
+	}
 	if upper == "DATABASE_URL" || envOtherDBURL.MatchString(val) {
 		return databaseSecretEntry(key)
 	}

@@ -397,6 +397,16 @@ func TestDetectNodeDoesNotSubstitutePostgresForMongo(t *testing.T) {
 	}
 }
 
+func TestLocalDatabaseURLRemainsLiteral(t *testing.T) {
+	const localURL = "file:./preview.db"
+	if got := scrubValue("DATABASE_URL", localURL); got != localURL {
+		t.Errorf("Compose DATABASE_URL = %q, want %q", got, localURL)
+	}
+	if got := classifyEnv("DATABASE_URL", localURL).Value; got != localURL {
+		t.Errorf("example DATABASE_URL = %q, want %q", got, localURL)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
