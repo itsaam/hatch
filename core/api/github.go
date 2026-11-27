@@ -37,8 +37,9 @@ type prEvent struct {
 	Action      string `json:"action"`
 	Number      int    `json:"number"`
 	PullRequest struct {
-		HTMLURL string `json:"html_url"`
-		Head    struct {
+		HTMLURL   string    `json:"html_url"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Head      struct {
 			Ref  string `json:"ref"`
 			SHA  string `json:"sha"`
 			Repo struct {
@@ -192,7 +193,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
 			if deployer.kube != nil {
-				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged); err != nil {
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged, ev.PullRequest.UpdatedAt); err != nil {
 					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -246,7 +247,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		case "closed":
 			if deployer.kube != nil {
-				if err := deployer.storeKubeWebhook(ctx, ref, kubePullClosed); err != nil {
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullClosed, ev.PullRequest.UpdatedAt); err != nil {
 					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -288,7 +289,6 @@ func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app 
 	decision, err := automaticPreviewTrigger(ctx, httpClient, app, ref)
 	if err != nil {
 		log.Printf("decide trigger %s#%d: %v", ref.Repo, ref.PR, err)
-		return decisionSkipMention
 	}
 	return decision
 }
@@ -307,7 +307,7 @@ func automaticPreviewTrigger(ctx context.Context, httpClient *http.Client, app *
 		if ok {
 			files, err := app.ListPRFiles(ctx, ref.InstallationID, owner, repo, ref.PR)
 			if err != nil {
-				return decisionSkipMention, err
+				return decisionBuild, err
 			}
 			if allFilesMatchSkip(files, cfg.SkipPaths) {
 				return decisionSkipDocs, nil

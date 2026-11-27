@@ -10,7 +10,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var errAwaitingGitHub = errors.New("GitHub pull request state does not match the delivery")
+var (
+	errAwaitingGitHub     = errors.New("GitHub pull request state does not match the delivery")
+	errSupersededDelivery = errors.New("a newer GitHub state superseded the delivery")
+)
 
 type kubePullIntent uint8
 
@@ -148,15 +151,20 @@ func (d *Deployer) queueKubeStopCommand(ctx context.Context, ref PreviewRef, com
 	return queued && err == nil, err
 }
 
-func (d *Deployer) storeKubeWebhook(ctx context.Context, ref PreviewRef, intent kubePullIntent) error {
+func (d *Deployer) storeKubeWebhook(ctx context.Context, ref PreviewRef, intent kubePullIntent, updatedAt time.Time) error {
 	if intent == kubePullClosed {
 		ref.SHA = ""
 	}
+	var sourceUpdatedAt *time.Time
+	if !updatedAt.IsZero() {
+		sourceUpdatedAt = &updatedAt
+	}
 	_, err := d.pool.Exec(ctx, `INSERT INTO kube_github_deliveries
-		(repo_full_name, pr_number, installation_id, commit_sha, closed)
-		VALUES ($1,$2,$3,$4,$5) ON CONFLICT (repo_full_name, pr_number, commit_sha, closed) DO UPDATE
-		SET id=EXCLUDED.id, installation_id=EXCLUDED.installation_id, available_at=NOW(), mismatches=0`,
-		ref.Repo, ref.PR, ref.InstallationID, ref.SHA, intent == kubePullClosed)
+		(repo_full_name, pr_number, installation_id, commit_sha, closed, source_updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (repo_full_name, pr_number, commit_sha, closed) DO UPDATE
+		SET id=EXCLUDED.id, installation_id=EXCLUDED.installation_id, available_at=NOW(), mismatches=0,
+		    source_updated_at=greatest(kube_github_deliveries.source_updated_at, EXCLUDED.source_updated_at)`,
+		ref.Repo, ref.PR, ref.InstallationID, ref.SHA, intent == kubePullClosed, sourceUpdatedAt)
 	return err
 }
 
@@ -187,6 +195,7 @@ func (d *Deployer) kubeAutoBuildAllowed(ctx context.Context, ref PreviewRef) (bo
 func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader, autoAllowed func(context.Context, PreviewRef) (bool, error)) (bool, error) {
 	var id int64
 	var mismatches int16
+	var sourceUpdatedAt *time.Time
 	var ref PreviewRef
 	var closed bool
 	err := d.pool.QueryRow(ctx, `WITH next AS (
@@ -195,8 +204,8 @@ func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader,
 	)
 	UPDATE kube_github_deliveries d SET available_at=NOW() + interval '30 seconds'
 	FROM next WHERE d.id=next.id
-	RETURNING d.id,d.repo_full_name,d.pr_number,d.installation_id,d.commit_sha,d.closed,d.mismatches`).Scan(
-		&id, &ref.Repo, &ref.PR, &ref.InstallationID, &ref.SHA, &closed, &mismatches)
+	RETURNING d.id,d.repo_full_name,d.pr_number,d.installation_id,d.commit_sha,d.closed,d.mismatches,d.source_updated_at`).Scan(
+		&id, &ref.Repo, &ref.PR, &ref.InstallationID, &ref.SHA, &closed, &mismatches, &sourceUpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -211,15 +220,30 @@ func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader,
 	defer cancel()
 	if !closed {
 		allowed, err := autoAllowed(attempt, ref)
-		if err != nil {
+		if err != nil && !errors.Is(err, errInvalidCompose) {
 			return true, err
 		}
-		if !allowed {
-			_, err := d.pool.Exec(ctx, `DELETE FROM kube_github_deliveries WHERE id=$1`, id)
-			return true, err
+		if !allowed || err != nil {
+			_, deleteErr := d.pool.Exec(ctx, `DELETE FROM kube_github_deliveries WHERE id=$1`, id)
+			return true, errors.Join(err, deleteErr)
 		}
 	}
-	_, err = d.queueKubePullRequest(attempt, ref, intent, 0, read)
+	observe := read
+	if closed && sourceUpdatedAt != nil {
+		observe = func(ctx context.Context, ref PreviewRef) (*pullState, error) {
+			pr, err := read(ctx, ref)
+			// Time is only evidence of a later reopening. Equal timestamps
+			// remain ambiguous and must not discard the pending closure.
+			if err == nil && pr.State == "open" && pr.UpdatedAt.After(*sourceUpdatedAt) {
+				return nil, errSupersededDelivery
+			}
+			return pr, err
+		}
+	}
+	_, err = d.queueKubePullRequest(attempt, ref, intent, 0, observe)
+	if errors.Is(err, errSupersededDelivery) {
+		err = nil
+	}
 	if errors.Is(err, errAwaitingGitHub) {
 		// An old head can be superseded. A closure remains pending until the
 		// canonical state confirms it, with a slower cadence after rapid retries.

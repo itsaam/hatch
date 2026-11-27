@@ -459,12 +459,17 @@ func fetchRepoFile(ctx context.Context, httpClient *http.Client, app *AppClient,
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("fetch %s http %d: %s", path, resp.StatusCode, truncate(string(body), 200))
 	}
 	return body, nil
 }
+
+var errInvalidCompose = errors.New("invalid .hatch.yml")
 
 // loadComposeForRef fetches `.hatch.yml` at the PR's commit. If the file is
 // absent, it returns FallbackCompose(). Parse errors are surfaced.
@@ -478,7 +483,7 @@ func loadComposeForRef(ctx context.Context, httpClient *http.Client, app *AppCli
 	}
 	spec, err := ParseCompose(data)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("%w: %w", errInvalidCompose, err)
 	}
 	return spec, true, nil
 }

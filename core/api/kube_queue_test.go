@@ -50,7 +50,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries} {
+	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries, migrationKubeGitHubDeliveryTime} {
 		mustExec(pool, migration)
 	}
 	d, err := NewDeployer(pool, "unused", "hatch.example.org", 1)
@@ -226,7 +226,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if latest := mustClaim("deploy"); latest.ref.SHA != newHead.SHA {
 		t.Fatalf("concurrent observations queued the wrong head: %+v", latest)
 	}
-	if err := d.storeKubeWebhook(ctx, newHead, kubePullChanged); err != nil {
+	if err := d.storeKubeWebhook(ctx, newHead, kubePullChanged, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	configurationFailure := errors.New("temporary config read failure")
@@ -241,7 +241,19 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	}); !worked || err != nil {
 		t.Fatalf("manual configuration was not ignored: worked=%v, err=%v", worked, err)
 	}
-	if err := d.storeKubeWebhook(ctx, newHead, kubePullClosed); err != nil {
+	if err := d.storeKubeWebhook(ctx, newHead, kubePullChanged, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := d.processKubeWebhook(ctx, commandlessReader(t), func(context.Context, PreviewRef) (bool, error) {
+		return false, errInvalidCompose
+	}); !worked || !errors.Is(err, errInvalidCompose) {
+		t.Fatalf("invalid config handling: worked=%v, err=%v", worked, err)
+	}
+	mustExec(pool, `UPDATE kube_github_deliveries SET available_at=NOW()`)
+	if worked, err := d.processKubeWebhook(ctx, commandlessReader(t), commandlessPolicy(t)); worked || err != nil {
+		t.Fatalf("invalid configuration was retained: worked=%v, err=%v", worked, err)
+	}
+	if err := d.storeKubeWebhook(ctx, newHead, kubePullClosed, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	autoAllowed := func(context.Context, PreviewRef) (bool, error) { return true, nil }
@@ -262,13 +274,26 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	}
 	makeDeliveryReady()
 	if worked, err := d.processKubeWebhook(ctx, func(ctx context.Context, _ PreviewRef) (*pullState, error) {
-		return fixturePull(newHead, "closed"), d.storeKubeWebhook(ctx, newHead, kubePullClosed)
+		return fixturePull(newHead, "closed"), d.storeKubeWebhook(ctx, newHead, kubePullClosed, time.Time{})
 	}, autoAllowed); !worked || err != nil {
 		t.Fatalf("closure retry: worked=%v, err=%v", worked, err)
 	}
 	mustClaim("close")
 	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "closed")), autoAllowed); !worked || err != nil {
 		t.Fatalf("replacement signal was lost during processing: worked=%v, err=%v", worked, err)
+	}
+	closedAt := time.Now().UTC().Truncate(time.Second)
+	if err := d.storeKubeWebhook(ctx, newHead, kubePullClosed, closedAt); err != nil {
+		t.Fatal(err)
+	}
+	laterOpen := fixturePull(newHead, "open")
+	laterOpen.UpdatedAt = closedAt.Add(time.Second)
+	if worked, err := d.processKubeWebhook(ctx, reader(laterOpen), autoAllowed); !worked || err != nil {
+		t.Fatalf("superseded close handling: worked=%v, err=%v", worked, err)
+	}
+	makeDeliveryReady()
+	if worked, err := d.processKubeWebhook(ctx, commandlessReader(t), commandlessPolicy(t)); worked || err != nil {
+		t.Fatalf("superseded close was retained: worked=%v, err=%v", worked, err)
 	}
 
 	commandReader := reader(fixturePull(newHead, "open"))
@@ -310,5 +335,12 @@ func commandlessReader(t *testing.T) pullStateReader {
 	return func(context.Context, PreviewRef) (*pullState, error) {
 		t.Fatal("the manual preview policy reached the GitHub state observer")
 		return nil, nil
+	}
+}
+
+func commandlessPolicy(t *testing.T) func(context.Context, PreviewRef) (bool, error) {
+	return func(context.Context, PreviewRef) (bool, error) {
+		t.Fatal("a finished delivery was retried")
+		return false, nil
 	}
 }

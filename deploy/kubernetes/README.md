@@ -160,7 +160,8 @@ kubectl -n hatch-system rollout status deployment/hatch-landing
 ```
 
 Verify the public API at `/readyz` and open the landing URL. Point the GitHub App
-webhook to `https://<api-host>/api/github/webhook`. Open a test PR in an allowed
+webhook to `https://<api-host>/api/github/webhook` and subscribe to
+`pull_request` and `issue_comment`. Open a test PR in an allowed
 repository, comment `@hatchpr preview`, and confirm the external build, image pull, HTTPS preview and cleanup
 on PR close.
 
