@@ -127,6 +127,11 @@ cp .env.example .env
 docker compose up -d
 ```
 
+Pour garder des limites par visiteur derrière Traefik, renseigne
+`HATCH_TRUSTED_PROXY_CIDRS` avec les adresses des proxies qui contrôlent
+`X-Forwarded-For`. Sans ce réglage, les requêtes d'un même proxy partagent leur
+limite. Évite d'y inclure les réseaux qui hébergent les conteneurs des previews.
+
 Procédure complète et runbook : [hatchpr.dev/docs](https://hatchpr.dev/docs/).
 
 ## Limites actuelles

@@ -354,8 +354,9 @@ func (c *AppClient) IsCollaborator(ctx context.Context, installationID int64, ow
 // event triggers a deploy: the head SHA + branch + state, since the comment
 // payload only carries the issue/PR number.
 type pullState struct {
-	State string `json:"state"`
-	Head  struct {
+	State     string    `json:"state"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Head      struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
 		Repo struct {

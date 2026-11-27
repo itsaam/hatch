@@ -162,7 +162,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 		//    or push directly to a branch of the base repo.
 		// Both paths return 202 Accepted with a silent log: we avoid
 		//    leaking which owners are allowed via response shape.
-		owner, _, splitOK := splitRepo(ev.Repository.FullName)
+		owner, repo, splitOK := splitRepo(ev.Repository.FullName)
 		if !splitOK || !allowedOwners[strings.ToLower(owner)] {
 			log.Printf("webhook: owner %q not in allowlist, skipping %s#%d",
 				owner, ev.Repository.FullName, ev.Number)
@@ -223,7 +223,22 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			}
 
 			if deployer.kube != nil {
-				if err := deployer.queueKubePullRequest(ctx, ref, true, ev.PullRequest.UpdatedAt); err != nil {
+				updatedAt := ev.PullRequest.UpdatedAt
+				confirmed := app != nil && ref.InstallationID != 0
+				if confirmed {
+					pr, err := app.GetPullRequest(ctx, ref.InstallationID, owner, repo, ref.PR)
+					if err != nil {
+						log.Printf("confirm Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
+						http.Error(w, "pull request state unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					if pr.State != "open" || pr.Head.SHA != ref.SHA {
+						writeOK(w)
+						return
+					}
+					updatedAt = pr.UpdatedAt
+				}
+				if err := deployer.queueKubePullRequest(ctx, ref, true, updatedAt, confirmed); err != nil {
 					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -247,7 +262,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		case "closed":
 			if deployer.kube != nil {
-				if err := deployer.queueKubePullRequest(ctx, ref, false, ev.PullRequest.UpdatedAt); err != nil {
+				if err := deployer.queueKubePullRequest(ctx, ref, false, ev.PullRequest.UpdatedAt, false); err != nil {
 					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return

@@ -97,14 +97,15 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT status,url FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&state, &publicURL); err != nil || state != "running" || publicURL != url {
 		t.Fatalf("preview state = %q, %q, %v", state, publicURL, err)
 	}
-	if err := d.queueKubeWebhook(ctx, ref, false); err != nil {
+	eventAt := time.Now().UTC().Truncate(time.Second)
+	if err := d.queueKubePullRequest(ctx, ref, false, eventAt.Add(-2*time.Second), false); err != nil {
 		t.Fatal(err)
 	}
 	closing, err := d.claimKubeOperation(ctx)
 	if err != nil || closing.kind != "close" {
 		t.Fatalf("close claim = %+v, %v", closing, err)
 	}
-	if err := d.queueKubeWebhook(ctx, ref, true); err != nil {
+	if err := d.queueKubePullRequest(ctx, ref, true, eventAt.Add(-time.Second), true); err != nil {
 		t.Fatal(err)
 	}
 	d.completeKubeOperation(ctx, closing, "closed", "")
@@ -121,31 +122,39 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if err := d.publishCurrentKubeOperation(ctx, reopened, func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("current publication was rejected: %v", err)
 	}
-	eventAt := time.Now().UTC().Truncate(time.Second)
 	if err := d.publishCurrentKubeOperation(ctx, reopened, func(ctx context.Context) error {
-		return d.queueKubePullRequest(ctx, ref, false, eventAt)
+		return d.queueKubePullRequest(ctx, ref, false, eventAt, false)
 	}); err == nil {
 		t.Fatal("publication did not notice a concurrent close")
 	}
 	for _, stale := range []time.Time{eventAt.Add(-time.Second), eventAt} {
-		if err := d.queueKubePullRequest(ctx, ref, true, stale); err != nil {
+		if err := d.queueKubePullRequest(ctx, ref, true, stale, true); err != nil {
 			t.Fatal(err)
 		}
+	}
+	latest, err := d.claimKubeOperation(ctx)
+	if err != nil || latest.kind != "close" {
+		t.Fatalf("stale delivery overrode closure: %+v, %v", latest, err)
 	}
 	staleRef := ref
 	staleRef.SHA = strings.Repeat("c", 40)
 	if !d.enqueueKubeOperation(staleRef, "close") {
 		t.Fatal("stop command rejected a preview from an older commit")
 	}
-	latest, err := d.claimKubeOperation(ctx)
-	if err != nil || latest.kind != "close" {
-		t.Fatalf("stale delivery overrode closure: %+v, %v", latest, err)
-	}
-	if err := d.queueKubePullRequest(ctx, ref, true, eventAt.Add(time.Second)); err != nil {
+	if err := d.queueKubePullRequest(ctx, ref, true, eventAt.Add(time.Second), true); err != nil {
 		t.Fatal(err)
 	}
+	newHead := ref
+	newHead.SHA = strings.Repeat("d", 40)
+	if err := d.queueKubePullRequest(ctx, newHead, true, eventAt.Add(time.Second), true); err != nil {
+		t.Fatal(err)
+	}
+	latest, err = d.claimKubeOperation(ctx)
+	if err != nil || latest.kind != "deploy" || latest.ref.SHA != newHead.SHA {
+		t.Fatalf("same-second verified head was skipped: %+v, %v", latest, err)
+	}
 	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
-	if err := d.queueKubeWebhook(ctx, ref, false); err == nil {
+	if err := d.queueKubePullRequest(ctx, newHead, false, eventAt.Add(2*time.Second), false); err == nil {
 		t.Fatal("expected the queue write to fail")
 	}
 	if err := pool.QueryRow(ctx, `SELECT status FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&state); err != nil || state != "pending" {

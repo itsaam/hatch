@@ -46,13 +46,7 @@ func enqueueKubeTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, operation str
 	return err
 }
 
-func (d *Deployer) queueKubeWebhook(ctx context.Context, ref PreviewRef, deploy bool) error {
-	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		return queueKubePreviewTx(ctx, tx, ref, deploy)
-	})
-}
-
-func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, deploy bool, updatedAt time.Time) error {
+func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, deploy bool, updatedAt time.Time, confirmedOpen bool) error {
 	if updatedAt.IsZero() {
 		return errors.New("GitHub pull request update time is missing")
 	}
@@ -63,8 +57,8 @@ func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, dep
 			VALUES ($1,$2,$3,$4) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
 			SET event_at=EXCLUDED.event_at, closed=EXCLUDED.closed
 			WHERE EXCLUDED.event_at > kube_pull_request_events.event_at OR
-			(EXCLUDED.event_at = kube_pull_request_events.event_at AND EXCLUDED.closed AND NOT kube_pull_request_events.closed)`,
-			ref.Repo, ref.PR, updatedAt, !deploy)
+			(EXCLUDED.event_at = kube_pull_request_events.event_at AND NOT kube_pull_request_events.closed
+			AND (EXCLUDED.closed OR $5))`, ref.Repo, ref.PR, updatedAt, !deploy, confirmedOpen)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -278,6 +272,15 @@ func (d *Deployer) deployKubeSpec(ctx context.Context, job kubeOperation, spec *
 }
 
 func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOperation, publish func(context.Context) error) error {
+	if owner, repo, ok := splitRepo(job.ref.Repo); ok && d.app != nil && job.ref.InstallationID != 0 {
+		current, err := d.app.GetPullRequest(ctx, job.ref.InstallationID, owner, repo, job.ref.PR)
+		if err != nil {
+			return err
+		}
+		if current.State != "open" {
+			return errors.New("GitHub pull request is no longer open")
+		}
+	}
 	if err := d.checkKubePublication(ctx, job); err != nil {
 		return err
 	}

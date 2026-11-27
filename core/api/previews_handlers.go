@@ -345,7 +345,10 @@ func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handl
 			if len(out) == 0 {
 				return false, send("", map[string]any{"kind": "build", "services": out})
 			}
-			return allTerminal && !active && runtimeErr == nil, send("", map[string]any{"kind": "build", "services": out})
+			// Docker's stream historically ended if it could not locate a container.
+			// Keep polling when a known container's log endpoint is temporarily down.
+			terminal = allTerminal && !active && (runtimeErr == nil || deployer.kube == nil)
+			return terminal, send("", map[string]any{"kind": "build", "services": out})
 		}
 
 		if _, ok := emit(); !ok {
