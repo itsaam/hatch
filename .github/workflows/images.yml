@@ -66,6 +66,20 @@ jobs:
           push: false
           load: true
           tags: hatch-${{ matrix.workload }}:test
+      - name: Report image vulnerabilities with Trivy
+        env:
+          WORKLOAD: ${{ matrix.workload }}
+        run: |
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl --fail --silent --show-error --location \
+            --output "$tmp/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz
+          echo "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf  $tmp/trivy.tar.gz" | sha256sum --check
+          tar -xzf "$tmp/trivy.tar.gz" -C "$tmp" trivy
+          docker save --output "$tmp/image.tar" "hatch-${WORKLOAD}:test"
+          cd "$tmp"
+          ./trivy image --input image.tar --scanners vuln --exit-code 0 --timeout 5m
       - name: Verify the BuildKit client in the API image
         if: matrix.workload == 'api'
         run: docker run --rm --entrypoint /usr/bin/buildctl hatch-api:test --version
