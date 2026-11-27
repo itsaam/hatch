@@ -30,7 +30,7 @@ const (
 	commentTakenDown = "🧹 Preview taken down."
 	commentHibernate = "💤 Preview hibernated after %d days of inactivity."
 	commentSkipDocs  = "📄 Pas de preview : changements doc-only. Override avec `previews.skip_when_only: false` dans `.hatch.yml`."
-	commentMention   = "💤 Mode opt-in (`previews.trigger: mention`). Mentionne `@%s` dans un commentaire pour déclencher une preview."
+	commentMention   = "💤 Écris `@%s preview` dans un commentaire pour lancer ou mettre à jour la preview."
 )
 
 type prEvent struct {
@@ -191,7 +191,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
-			switch decidePullRequestTrigger(ctx, deployer.HTTPExt(), app, pool, ev, botHandle) {
+			switch decidePullRequestTrigger(ctx, deployer.HTTPExt(), app, ev) {
 			case decisionSkipMention:
 				log.Printf("preview skip (mention mode): %s#%d", ev.Repository.FullName, ev.Number)
 				if app != nil && ev.Installation.ID != 0 && ev.Action == "opened" {
@@ -222,7 +222,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			}
 
 			if deployer.kube != nil {
-				if _, err := deployer.queueKubePullRequest(ctx, ref, kubePullChanged, deployer.githubPullState); err != nil {
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged); err != nil {
 					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -246,7 +246,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		case "closed":
 			if deployer.kube != nil {
-				if _, err := deployer.queueKubePullRequest(ctx, ref, kubePullClosed, deployer.githubPullState); err != nil {
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullClosed); err != nil {
 					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return
@@ -282,24 +282,17 @@ const (
 )
 
 // decidePullRequestTrigger applies the .hatch.yml previews policy to the
-// incoming event. Network errors fail open (we build) — better a useless
-// build than a missed preview.
-func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, pool *pgxpool.Pool, ev prEvent, botHandle string) triggerDecision {
+// incoming event. An unavailable configuration cannot authorize an automatic build.
+func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, ev prEvent) triggerDecision {
 	spec, _, err := loadComposeForRef(ctx, httpClient, app, ev.Installation.ID, ev.Repository.FullName, ev.PullRequest.Head.SHA)
 	if err != nil {
-		log.Printf("decide trigger: load compose %s#%d: %v (defaulting to build)", ev.Repository.FullName, ev.Number, err)
-		return decisionBuild
+		log.Printf("decide trigger: load compose %s#%d: %v", ev.Repository.FullName, ev.Number, err)
+		return decisionSkipMention
 	}
 	cfg := EffectivePreviews(spec)
 
-	if cfg.Trigger == TriggerMention {
-		// In mention mode, the very first deploy must be initiated by an
-		// @mention. Once a preview row exists (and is not closed) we treat
-		// later synchronize events as "keep the live preview fresh".
-		if !(ev.Action == "synchronize" && previewExists(ctx, pool, ev.Repository.FullName, ev.Number)) {
-			return decisionSkipMention
-		}
-		// Fall through to docs-only check.
+	if cfg.Trigger != TriggerAuto {
+		return decisionSkipMention
 	}
 
 	if cfg.SkipWhenOnly != nil && *cfg.SkipWhenOnly && app != nil && ev.Installation.ID != 0 {
@@ -317,10 +310,8 @@ func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app 
 }
 
 // previewExists returns true when a preview row is already tracked for the
-// PR and not in a terminal "closed" state. Used by mention mode to decide
-// whether a synchronize should rebuild silently. Transient DB errors are
-// logged and treated as "no preview" — the worst case is a missed silent
-// rebuild that the user can re-trigger via @mention.
+// PR and not in a terminal "closed" state. Transient DB errors are logged
+// and treated as "no preview".
 func previewExists(ctx context.Context, pool *pgxpool.Pool, repo string, pr int) bool {
 	var status string
 	err := pool.QueryRow(ctx,

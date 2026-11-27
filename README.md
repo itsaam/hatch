@@ -51,19 +51,19 @@ seed:
   sql: ./seed/preview.sql
 ```
 
-Tu pushes une branche et ouvres une PR. Hatch construit les images, démarre les services dans un environnement isolé, attend les healthchecks et commente le lien HTTPS sur la PR. À la fermeture, Hatch supprime les ressources de la preview et conserve son état dans l'historique.
+Tu pushes une branche, ouvres une PR et commentes `@hatchpr preview`. Hatch construit les images, démarre les services dans un environnement isolé, attend les healthchecks et commente le lien HTTPS sur la PR. À la fermeture, Hatch supprime les ressources de la preview et conserve son état dans l'historique.
 
 Chaque preview a sa propre DB vierge, son propre mot de passe (dérivé HMAC), aucune fuite d'une PR à l'autre.
 
 ## Ce qui marche aujourd'hui
 
-Multi-services arbitraires (tout ce qui rentre dans une image Docker). Seed SQL automatique au boot. `depends_on` qui attend vraiment le healthcheck. HTTPS Let's Encrypt sans config. Bot GitHub qui poste, met à jour au sync, annonce la suppression. Cleanup automatique à la fermeture + TTL 7 jours d'inactivité. Dashboard web pour voir les previews actifs, redeployer, lire les logs en streaming, gérer les secrets chiffrés.
+Multi-services arbitraires (tout ce qui rentre dans une image Docker). Seed SQL automatique au boot. `depends_on` qui attend vraiment le healthcheck. HTTPS Let's Encrypt sans config. Bot GitHub qui publie le lien de preview et annonce sa suppression. Cleanup automatique à la fermeture + TTL 7 jours d'inactivité. Dashboard web pour voir les previews actifs, redeployer, lire les logs en streaming, gérer les secrets chiffrés.
 
 ## Quick start
 
 1. Installer la GitHub App : [github.com/apps/hatchpr](https://github.com/apps/hatchpr)
 2. Ajouter `.hatch.yml` à la racine du repo (voir [docs](https://hatchpr.dev/docs/))
-3. Ouvrir une PR — preview live en 30 à 60 secondes
+3. Ouvrir une PR et commenter `@hatchpr preview`. Répéter la commande après un push pour mettre la preview à jour.
 
 Le [demo repo](https://github.com/itsaam/hatch-demo-node) montre un stack Node + Postgres complet et fonctionnel.
 
@@ -140,7 +140,7 @@ C'est une beta utilisable mais incomplète. Ne sont pas encore livrés :
 
 - volumes persistants (la DB d'une preview repart de zéro à chaque redeploy — c'est souvent voulu, mais pas configurable) ;
 - multi-region ;
-- rollback explicite vers un commit antérieur (un nouveau push réécrit la preview).
+- rollback explicite vers un commit antérieur.
 
 Les bugs et idées vivent dans les [issues GitHub](https://github.com/itsaam/hatch/issues).
 

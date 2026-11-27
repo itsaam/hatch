@@ -31,8 +31,8 @@ type ComposeSpec struct {
 // All fields are optional; defaults live in EffectivePreviews.
 type PreviewsConfig struct {
 	// Trigger selects the auto-deploy policy for opened/reopened PRs:
-	//   "auto"    — build on every PR event (default)
-	//   "mention" — opt-in: only build after the user @-mentions the bot
+	//   "auto"    — build automatically for eligible PR events
+	//   "mention" — require @hatchpr preview (default)
 	Trigger string `yaml:"trigger,omitempty"`
 
 	// SkipWhenOnly toggles the "skip preview when only documentation changed"
@@ -219,7 +219,7 @@ func validateCompose(spec *ComposeSpec) error {
 // Always returns a non-nil pointer.
 func EffectivePreviews(spec *ComposeSpec) PreviewsConfig {
 	out := PreviewsConfig{
-		Trigger:   TriggerAuto,
+		Trigger:   TriggerMention,
 		SkipPaths: append([]string(nil), defaultSkipPaths...),
 	}
 	t := true

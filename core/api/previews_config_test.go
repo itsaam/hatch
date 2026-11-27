@@ -1,16 +1,45 @@
 package main
 
 import (
+	"io"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 )
 
+func TestPullRequestRequiresExplicitAutoConfiguration(t *testing.T) {
+	const service = "version: 1\nservices:\n  web:\n    build: .\n"
+	for _, test := range []struct {
+		name, action, compose string
+		status                int
+		want                  triggerDecision
+	}{
+		{"open defaults to manual", "opened", service, http.StatusOK, decisionSkipMention},
+		{"push remains manual", "synchronize", service, http.StatusOK, decisionSkipMention},
+		{"explicit auto", "synchronize", service + "previews:\n  trigger: auto\n", http.StatusOK, decisionBuild},
+		{"missing config", "opened", "", http.StatusNotFound, decisionSkipMention},
+		{"unavailable config", "opened", "", http.StatusServiceUnavailable, decisionSkipMention},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event := prEvent{Action: test.action, Number: 1}
+			event.Repository.FullName = "acme/app"
+			event.PullRequest.Head.SHA = strings.Repeat("a", 40)
+			client := &http.Client{Transport: kubeTestTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.compose))}, nil
+			})}
+			if got := decidePullRequestTrigger(t.Context(), client, nil, event); got != test.want {
+				t.Fatalf("trigger = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestEffectivePreviews_Defaults(t *testing.T) {
 	cfg := EffectivePreviews(nil)
-	if cfg.Trigger != TriggerAuto {
-		t.Errorf("default trigger = %q, want auto", cfg.Trigger)
+	if cfg.Trigger != TriggerMention {
+		t.Errorf("default trigger = %q, want mention", cfg.Trigger)
 	}
 	if cfg.SkipWhenOnly == nil || !*cfg.SkipWhenOnly {
 		t.Errorf("default skip_when_only must be true")
@@ -27,14 +56,14 @@ func TestEffectivePreviews_Override(t *testing.T) {
 	f := false
 	spec := &ComposeSpec{
 		Previews: &PreviewsConfig{
-			Trigger:      "mention",
+			Trigger:      "auto",
 			SkipWhenOnly: &f,
 			SkipPaths:    []string{"**/*.txt"},
 		},
 	}
 	cfg := EffectivePreviews(spec)
-	if cfg.Trigger != TriggerMention {
-		t.Errorf("trigger = %q, want mention", cfg.Trigger)
+	if cfg.Trigger != TriggerAuto {
+		t.Errorf("trigger = %q, want auto", cfg.Trigger)
 	}
 	if cfg.SkipWhenOnly == nil || *cfg.SkipWhenOnly {
 		t.Errorf("skip_when_only must be false")

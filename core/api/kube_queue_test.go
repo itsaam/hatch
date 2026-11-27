@@ -50,7 +50,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot} {
+	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries} {
 		mustExec(pool, migration)
 	}
 	d, err := NewDeployer(pool, "unused", "hatch.example.org", 1)
@@ -104,8 +104,8 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	}
 	submit := func(event PreviewRef, intent kubePullIntent, canonical *pullState) bool {
 		t.Helper()
-		queued, err := d.queueKubePullRequest(ctx, event, intent, reader(canonical))
-		if err != nil {
+		queued, err := d.queueKubePullRequest(ctx, event, intent, 0, reader(canonical))
+		if err != nil && !errors.Is(err, errAwaitingGitHub) {
 			t.Fatal(err)
 		}
 		return queued
@@ -132,6 +132,11 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if submit(ref, kubePullChanged, open) {
 		t.Fatal("redelivery requeued an active deploy")
 	}
+	upperCaseRef := ref
+	upperCaseRef.Repo = strings.ToUpper(ref.Repo)
+	if submit(upperCaseRef, kubePullChanged, open) {
+		t.Fatal("repository case variation created another preview")
+	}
 	submit(ref, kubePullClosed, open)
 	if err := d.publishCurrentKubeOperation(ctx, reopened, reader(open), func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("duplicate or delayed close superseded the active deploy: %v", err)
@@ -152,7 +157,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		t.Fatal("publication did not notice GitHub closing before webhook delivery")
 	}
 	if err := d.publishCurrentKubeOperation(ctx, reopened, reader(open), func(context.Context) error {
-		_, err := d.queueKubePullRequest(ctx, ref, kubePullClosed, reader(closed))
+		_, err := d.queueKubePullRequest(ctx, ref, kubePullClosed, 0, reader(closed))
 		return err
 	}); err == nil {
 		t.Fatal("publication did not notice a concurrent close")
@@ -177,7 +182,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	firstDone := make(chan error, 1)
 	secondDone := make(chan error, 1)
 	go func() {
-		_, err := d.queueKubePullRequest(ctx, ref, kubePullChanged, func(ctx context.Context, _ PreviewRef) (*pullState, error) {
+		_, err := d.queueKubePullRequest(ctx, ref, kubePullChanged, 0, func(ctx context.Context, _ PreviewRef) (*pullState, error) {
 			close(firstRead)
 			select {
 			case <-releaseFirst:
@@ -196,7 +201,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 	go func() {
-		_, err := d.queueKubePullRequest(ctx, newHead, kubePullChanged, func(context.Context, PreviewRef) (*pullState, error) {
+		_, err := d.queueKubePullRequest(ctx, newHead, kubePullChanged, 0, func(context.Context, PreviewRef) (*pullState, error) {
 			close(secondRead)
 			return fixturePull(newHead, "open"), nil
 		})
@@ -221,9 +226,51 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if latest := mustClaim("deploy"); latest.ref.SHA != newHead.SHA {
 		t.Fatalf("concurrent observations queued the wrong head: %+v", latest)
 	}
+	if err := d.storeKubeWebhook(ctx, newHead, kubePullClosed); err != nil {
+		t.Fatal(err)
+	}
+	apiFailure := errors.New("temporarily unavailable")
+	if worked, err := d.processKubeWebhook(ctx, func(context.Context, PreviewRef) (*pullState, error) {
+		return nil, apiFailure
+	}); !worked || !errors.Is(err, apiFailure) {
+		t.Fatalf("failed observation: worked=%v, err=%v", worked, err)
+	}
+	makeDeliveryReady := func() {
+		t.Helper()
+		mustExec(pool, `UPDATE kube_github_deliveries SET available_at=NOW()`)
+	}
+	makeDeliveryReady()
+	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "open"))); !worked || err != nil {
+		t.Fatalf("inconclusive observation: worked=%v, err=%v", worked, err)
+	}
+	makeDeliveryReady()
+	if worked, err := d.processKubeWebhook(ctx, reader(fixturePull(newHead, "closed"))); !worked || err != nil {
+		t.Fatalf("closure retry: worked=%v, err=%v", worked, err)
+	}
+	mustClaim("close")
+
+	commandReader := reader(fixturePull(newHead, "open"))
+	if queued, err := d.queueKubePullRequest(ctx, newHead, kubePullRedeploy, 125, commandReader); !queued || err != nil {
+		t.Fatalf("deploy command: queued=%v, err=%v", queued, err)
+	}
+	mustClaim("deploy")
+	if queued, err := d.queueKubeStopCommand(ctx, newHead, 126); !queued || err != nil {
+		t.Fatalf("stop command: queued=%v, err=%v", queued, err)
+	}
+	if queued, err := d.queueKubePullRequest(ctx, newHead, kubePullRedeploy, 125, commandReader); queued || err != nil {
+		t.Fatalf("redelivery replaced stop: queued=%v, err=%v", queued, err)
+	}
+	mustClaim("close")
+	if queued, err := d.queueKubePullRequest(ctx, newHead, kubePullRedeploy, 127, commandReader); !queued || err != nil {
+		t.Fatalf("new deploy command: queued=%v, err=%v", queued, err)
+	}
+	if queued, err := d.queueKubeStopCommand(ctx, newHead, 126); queued || err != nil {
+		t.Fatalf("redelivery replaced deploy: queued=%v, err=%v", queued, err)
+	}
+	mustClaim("deploy")
 
 	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
-	if _, err := d.queueKubePullRequest(ctx, newHead, kubePullClosed, reader(fixturePull(newHead, "closed"))); err == nil {
+	if _, err := d.queueKubePullRequest(ctx, newHead, kubePullClosed, 0, reader(fixturePull(newHead, "closed"))); err == nil {
 		t.Fatal("expected the queue write to fail")
 	}
 	if err := pool.QueryRow(ctx, `SELECT status FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&state); err != nil || state != "pending" {

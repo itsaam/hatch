@@ -158,7 +158,7 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		var err error
 		if deployer.kube != nil {
 			var queued bool
-			queued, err = deployer.queueKubePullRequest(ctx, ref, kubePullRedeploy, deployer.githubPullState)
+			queued, err = deployer.queueKubePullRequest(ctx, ref, kubePullRedeploy, ev.Comment.ID, deployer.githubPullState)
 			if err == nil && !queued {
 				writeOK(w)
 				return
@@ -188,6 +188,19 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		}
 
 	case verbDestroy:
+		if deployer.kube != nil {
+			queued, err := deployer.queueKubeStopCommand(ctx, ref, ev.Comment.ID)
+			if err != nil {
+				log.Printf("issue_comment: queue stop %s#%d: %v", ref.Repo, ref.PR, err)
+				http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if queued {
+				_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
+			}
+			writeOK(w)
+			return
+		}
 		if !previewExists(ctx, pool, ref.Repo, ref.PR) {
 			// Nothing to destroy — silent OK.
 			writeOK(w)
@@ -246,8 +259,8 @@ func ensureMentionStickyComment(ctx context.Context, pool *pgxpool.Pool, app *Ap
 	return err
 }
 
-// parseMention reports whether `body` mentions the bot, and returns the
-// requested verb (default: deploy). Matching is case-insensitive.
+// parseMention recognizes an explicit command after the bot's exact handle.
+// Matching is case-insensitive.
 func parseMention(body, botHandle string) (commentVerb, bool) {
 	if botHandle == "" {
 		return verbNone, false
@@ -263,22 +276,21 @@ func parseMention(body, botHandle string) (commentVerb, bool) {
 	if idx > 0 && isWordChar(body[idx-1]) {
 		return verbNone, false
 	}
-	// First whitespace-delimited token after the handle is the verb (or
-	// empty if the mention is bare or trailed only by punctuation/EOL).
-	rest := strings.TrimLeft(body[idx+len(handle):], " \t\r\n")
-	verb := rest
-	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
-		verb = rest[:end]
+	rest := body[idx+len(handle):]
+	if len(rest) == 0 || !strings.ContainsRune(" \t\r\n", rune(rest[0])) {
+		return verbNone, false
 	}
-	switch strings.Trim(verb, ".,!?:;`*_-") {
-	case "", "preview", "deploy", "redeploy", "rebuild":
+	words := strings.Fields(rest)
+	if len(words) == 0 {
+		return verbNone, false
+	}
+	switch strings.Trim(words[0], ".,!?:;`*_-") {
+	case "preview":
 		return verbDeploy, true
 	case "delete", "destroy", "down", "kill", "stop":
 		return verbDestroy, true
 	default:
-		// Mentioned but verb unknown — default to deploy. This makes
-		// "@hatchpr please" or "@hatchpr 🙏" still trigger a build.
-		return verbDeploy, true
+		return verbNone, false
 	}
 }
 

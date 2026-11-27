@@ -46,91 +46,6 @@ func enqueueKubeTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, operation str
 	return err
 }
 
-type kubePullIntent uint8
-
-const (
-	kubePullChanged kubePullIntent = iota
-	kubePullClosed
-	kubePullRedeploy
-)
-
-type pullStateReader func(context.Context, PreviewRef) (*pullState, error)
-
-func (d *Deployer) githubPullState(ctx context.Context, ref PreviewRef) (*pullState, error) {
-	owner, repo, ok := splitRepo(ref.Repo)
-	if !ok || ref.PR <= 0 {
-		return nil, errors.New("invalid pull request")
-	}
-	if d.app != nil && ref.InstallationID != 0 {
-		return d.app.GetPullRequest(ctx, ref.InstallationID, owner, repo, ref.PR)
-	}
-	return fetchPullRequest(ctx, d.httpExt, "https://api.github.com", "", owner, repo, ref.PR)
-}
-
-func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, intent kubePullIntent, read pullStateReader) (bool, error) {
-	var queued bool
-	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		// GitHub webhook timestamps cannot order changes within one second.
-		// Serialize the fresh read and its queue write for this PR. No Kubernetes
-		// request is made under this lock, and independent PRs keep their own locks.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(
-			'hatch-kube-pr:' || lower($1::text) || '#' || $2::integer::text, 0))`, ref.Repo, ref.PR); err != nil {
-			return err
-		}
-		pr, err := read(ctx, ref)
-		if err != nil {
-			return err
-		}
-		if pr.State != "open" && pr.State != "closed" {
-			return errors.New("invalid GitHub pull request state")
-		}
-		closed := pr.State == "closed"
-		if !closed {
-			if intent == kubePullClosed || !strings.EqualFold(pr.Head.Repo.FullName, ref.Repo) {
-				return nil
-			}
-			if pr.Head.SHA == "" || pr.Head.Ref == "" {
-				return errors.New("GitHub pull request head is incomplete")
-			}
-			if intent == kubePullChanged && pr.Head.SHA != ref.SHA {
-				return nil
-			}
-			ref.SHA, ref.Branch = pr.Head.SHA, pr.Head.Ref
-		}
-
-		tag, err := tx.Exec(ctx, `INSERT INTO kube_pull_request_events (repo_full_name, pr_number, head_sha, closed)
-			VALUES ($1,$2,$3,$4) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
-			SET head_sha=EXCLUDED.head_sha, closed=EXCLUDED.closed
-			WHERE kube_pull_request_events.closed IS DISTINCT FROM EXCLUDED.closed
-			   OR kube_pull_request_events.head_sha IS DISTINCT FROM EXCLUDED.head_sha
-			   OR $5::boolean`, ref.Repo, ref.PR, pr.Head.SHA, closed, intent == kubePullRedeploy && !closed)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		if err := queueKubePreviewTx(ctx, tx, ref, !closed); err != nil {
-			return err
-		}
-		queued = !closed
-		return nil
-	})
-	return queued && err == nil, err
-}
-
-func queueKubePreviewTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, deploy bool) error {
-	if deploy {
-		if _, err := tx.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID)); err != nil {
-			return err
-		}
-		return enqueueKubeTx(ctx, tx, ref, "deploy")
-	}
-	tag, err := tx.Exec(ctx, `UPDATE previews SET status='closed', updated_at=NOW()
-		WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR)
-	if err != nil || tag.RowsAffected() == 0 {
-		return err
-	}
-	return enqueueKubeTx(ctx, tx, ref, "close")
-}
-
 func (d *Deployer) enqueueKubeExpiry(ctx context.Context, ref PreviewRef, days int) error {
 	_, err := d.pool.Exec(ctx, `INSERT INTO kube_operations (repo_full_name, pr_number, operation, expiry_days)
 		SELECT repo_full_name, pr_number, 'expire', $4 FROM previews
@@ -142,6 +57,12 @@ func (d *Deployer) enqueueKubeExpiry(ctx context.Context, ref PreviewRef, days i
 }
 
 func (d *Deployer) startKubeWorkers(ctx context.Context, count int) {
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.runKubeWebhookWorker(ctx)
+	}()
+
 	for i := 0; i < max(1, count); i++ {
 		d.wg.Add(1)
 		go func() {

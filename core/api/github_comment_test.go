@@ -11,11 +11,11 @@ func TestParseMention(t *testing.T) {
 		wantHit bool
 	}{
 		{
-			name:    "bare mention -> deploy",
+			name:    "bare mention is ignored",
 			body:    "@hatchpr",
 			bot:     "hatchpr",
-			want:    verbDeploy,
-			wantHit: true,
+			want:    verbNone,
+			wantHit: false,
 		},
 		{
 			name:    "mention preview -> deploy",
@@ -25,11 +25,11 @@ func TestParseMention(t *testing.T) {
 			wantHit: true,
 		},
 		{
-			name:    "mention deploy -> deploy",
+			name:    "deploy alias is ignored",
 			body:    "@hatchpr deploy",
 			bot:     "hatchpr",
-			want:    verbDeploy,
-			wantHit: true,
+			want:    verbNone,
+			wantHit: false,
 		},
 		{
 			name:    "mention delete -> destroy",
@@ -68,17 +68,17 @@ func TestParseMention(t *testing.T) {
 		},
 		{
 			name:    "mention with leading text",
-			body:    "Please @hatchpr deploy this!",
+			body:    "Please @hatchpr preview this!",
 			bot:     "hatchpr",
 			want:    verbDeploy,
 			wantHit: true,
 		},
 		{
-			name:    "unknown verb defaults to deploy",
+			name:    "unknown verb is ignored",
 			body:    "@hatchpr please?",
 			bot:     "hatchpr",
-			want:    verbDeploy,
-			wantHit: true,
+			want:    verbNone,
+			wantHit: false,
 		},
 		{
 			name:    "trailing punctuation stripped",
@@ -86,6 +86,11 @@ func TestParseMention(t *testing.T) {
 			bot:     "hatchpr",
 			want:    verbDestroy,
 			wantHit: true,
+		},
+		{
+			name: "lookalike handle is ignored",
+			body: "@hatchpr-preview preview",
+			bot:  "hatchpr",
 		},
 		{
 			name:    "different bot handle",
