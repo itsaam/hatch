@@ -149,7 +149,11 @@ func main() {
 	}
 
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	clientIP, err := proxyClientIPMiddleware(os.Getenv("HATCH_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		log.Fatalf("trusted proxies: %v", err)
+	}
+	r.Use(clientIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(10 * time.Second))
 	r.Use(cors.Handler(cors.Options{
@@ -173,12 +177,12 @@ func main() {
 	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(httprate.LimitByIP(5, time.Minute))
+		r.Use(httprate.Limit(5, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Post("/api/subscribe", subscribeHandler(pool))
 	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(httprate.LimitByIP(60, time.Minute))
+		r.Use(httprate.Limit(60, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
@@ -187,7 +191,7 @@ func main() {
 	// Secret store — gated by HATCH_ADMIN_TOKEN (bearer). See secrets_handlers.go.
 	r.Route("/api/secrets", func(r chi.Router) {
 		r.Use(requireAdminToken)
-		r.Use(httprate.LimitByIP(30, time.Minute))
+		r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Post("/", upsertSecretHandler(pool))
 		r.Get("/", listSecretsHandler(pool))
 		r.Delete("/", deleteSecretHandler(pool))
@@ -198,7 +202,7 @@ func main() {
 	// Preview admin endpoints — gated by HATCH_ADMIN_TOKEN. See previews_handlers.go.
 	r.Route("/api/previews", func(r chi.Router) {
 		r.Use(requireAdminToken)
-		r.Use(httprate.LimitByIP(30, time.Minute))
+		r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Get("/", listPreviewsHandler(pool))
 		r.Get("/{owner}/{repo}/{pr}/logs", previewLogsHandler(pool, deployer))
 		r.Get("/{owner}/{repo}/{pr}/logs/stream", previewLogsStreamHandler(pool, deployer))

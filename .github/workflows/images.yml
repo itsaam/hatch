@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version-file: core/api/go.mod
+          go-version: '1.27.4'
           cache-dependency-path: core/api/go.sum
       - name: Run Go tests with PostgreSQL
         working-directory: core/api

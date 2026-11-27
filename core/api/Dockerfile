@@ -1,6 +1,6 @@
-FROM moby/buildkit:v0.28.1 AS buildkit
+FROM moby/buildkit:v0.31.1 AS buildkit
 
-FROM golang:1.27-alpine AS build
+FROM golang:1.27.4-alpine AS build
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 COPY go.mod ./
