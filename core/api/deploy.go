@@ -60,6 +60,7 @@ type Deployer struct {
 	kubeBuilder *kubeBuilder
 
 	previewOwnerOnly bool
+	monitor          *errorMonitor
 
 	// locks serializes concurrent Deploy() calls for the same (repo, pr) so
 	// two near-simultaneous webhooks (e.g. reopen + synchronize) don't race

@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var errKubeOperationSuperseded = errors.New("preview operation was superseded during publication")
+
 type kubeOperation struct {
 	id         int64
 	kind       string
@@ -136,6 +138,9 @@ func (d *Deployer) runKubeOperation(ctx context.Context, job kubeOperation) {
 	removeRef.SHA = ""
 	if err := d.kube.destroy(removeCtx, removeRef); err != nil {
 		log.Printf("remove Kubernetes preview %s#%d: %v", ref.Repo, ref.PR, err)
+		if ctx.Err() == nil {
+			d.monitor.report("preview_cleanup_failed", nil, nil)
+		}
 		d.releaseKubeOperation(job, 30)
 		return
 	}
@@ -161,6 +166,9 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 		}
 		if err != nil {
 			log.Printf("check owner approval %s#%d: %v", ref.Repo, ref.PR, err)
+			if ctx.Err() == nil {
+				d.monitor.report("preview_approval_check_failed", nil, nil)
+			}
 			d.releaseKubeOperation(job, 15)
 			return
 		}
@@ -195,6 +203,9 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 		return
 	}
 	if err != nil {
+		if !errors.Is(deployCtx.Err(), context.Canceled) && !errors.Is(err, errInvalidCompose) && !errors.Is(err, errStaleOwnerApproval) && !errors.Is(err, errKubeOperationSuperseded) {
+			d.monitor.report("preview_deploy_failed", nil, nil)
+		}
 		d.failKubeDeploy(ctx, job, err)
 		return
 	}
@@ -332,7 +343,7 @@ func (d *Deployer) checkKubePublication(ctx context.Context, job kubeOperation) 
 	err := d.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM kube_operations op
 		JOIN previews p USING (repo_full_name, pr_number) WHERE op.id=$1 AND p.commit_sha=$2)`, job.id, job.ref.SHA).Scan(&current)
 	if err == nil && !current {
-		err = errors.New("preview operation was superseded during publication")
+		err = errKubeOperationSuperseded
 	}
 	return err
 }
@@ -391,6 +402,9 @@ func (d *Deployer) completeKubeOperation(ctx context.Context, job kubeOperation,
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			log.Printf("complete Kubernetes operation %d: %v", job.id, err)
+			if ctx.Err() == nil {
+				d.monitor.report("preview_state_update_failed", nil, nil)
+			}
 			d.releaseKubeOperation(job, 5)
 		}
 		return

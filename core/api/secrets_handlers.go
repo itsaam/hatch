@@ -79,7 +79,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func upsertSecretHandler(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body secretUpsertReq
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, int64(maxSecretValueBytes+1024)))
+		dec := json.NewDecoder(maxRequestBody(w, r.Body, int64(maxSecretValueBytes+1024)))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)

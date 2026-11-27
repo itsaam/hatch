@@ -216,3 +216,14 @@ Trivy reports vulnerabilities in both images without blocking on findings. Pushe
 to `main` or `v*` tags publish both images to GHCR with full `sha-<commit>` tags,
 plus `edge` for `main` or the Git tag for releases. Deployment is a separate
 manual operation.
+
+
+## Error monitoring
+
+Set `SENTRY_DSN` in the existing `hatch-api-env` Secret to send API and
+preview worker errors to a dedicated GlitchTip project. Set
+`SENTRY_ENVIRONMENT` and `SENTRY_RELEASE` for the deployment environment and
+source revision. The API reports HTTP 5xx responses, panics, and unexpected
+delivery, deploy and cleanup failures. Events use route templates and fixed
+categories. Request bodies, headers, login data and raw worker errors are
+excluded. Monitoring is optional and does not affect readiness.

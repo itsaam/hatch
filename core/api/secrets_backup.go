@@ -28,11 +28,11 @@ import (
 const secretsBackupVersion = 1
 
 type secretBackupItem struct {
-	Repo             string `json:"repo"`
-	Name             string `json:"name"`
+	Repo              string `json:"repo"`
+	Name              string `json:"name"`
 	ValueEncryptedB64 string `json:"value_encrypted_b64"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	CreatedAt         string `json:"created_at"`
+	UpdatedAt         string `json:"updated_at"`
 }
 
 type secretBackupDump struct {
@@ -114,7 +114,7 @@ func importSecretsHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		overwrite := strings.EqualFold(r.URL.Query().Get("overwrite"), "true")
 
 		const maxDumpBytes = 16 << 20 // 16 MiB
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDumpBytes))
+		dec := json.NewDecoder(maxRequestBody(w, r.Body, maxDumpBytes))
 		dec.DisallowUnknownFields()
 
 		var dump secretBackupDump
@@ -203,4 +203,3 @@ func importSecretsHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		})
 	}
 }
-

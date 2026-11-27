@@ -65,6 +65,14 @@ type subscribeReq struct {
 }
 
 func main() {
+	monitor, err := newErrorMonitor(os.Getenv("SENTRY_DSN"), getenv("SENTRY_ENVIRONMENT", "production"), os.Getenv("SENTRY_RELEASE"))
+	if err != nil {
+		log.Print("error monitoring disabled: invalid Sentry configuration")
+	} else if monitor != nil {
+		log.Print("error monitoring enabled")
+	}
+	defer monitor.flush()
+
 	dsn := mustEnv("DATABASE_URL")
 	allowedOrigin := mustEnv("ALLOWED_ORIGIN")
 	githubSecret := []byte(mustEnv("GITHUB_WEBHOOK_SECRET"))
@@ -154,6 +162,7 @@ func main() {
 	deployer.SetNotifier(&prNotifier{pool: pool, app: appClient})
 	deployer.SetAppClient(appClient)
 	deployer.previewOwnerOnly = ownerCommandOnly
+	deployer.monitor = monitor
 
 	reconcileCtx, reconcileCancel := context.WithTimeout(rootCtx, 30*time.Second)
 	if err := deployer.Reconcile(reconcileCtx, pool); err != nil {
@@ -175,6 +184,7 @@ func main() {
 	}
 	r.Use(clientIP)
 	r.Use(middleware.Recoverer)
+	r.Use(monitor.httpErrors)
 	r.Use(middleware.Timeout(10 * time.Second))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{allowedOrigin},
@@ -290,7 +300,7 @@ func getenvInt(k string, def int) int {
 func subscribeHandler(pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body subscribeReq
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		dec := json.NewDecoder(maxRequestBody(w, r.Body, 1024))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil {
 			http.Error(w, "invalid subscription request", http.StatusBadRequest)
