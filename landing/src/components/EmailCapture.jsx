@@ -16,7 +16,8 @@ export default function EmailCapture({ size = 'md' }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       })
-      setState(response.ok ? 'success' : 'error')
+      if (response.ok) setState('success')
+      else setState(response.status === 400 ? 'invalid' : 'error')
     } catch {
       setState('error')
     }
@@ -82,9 +83,9 @@ export default function EmailCapture({ size = 'md' }) {
           {state === 'loading' ? '...' : 'Notify me'}
         </button>
       </form>
-      {state === 'error' && (
+      {(state === 'error' || state === 'invalid') && (
         <p role="alert" style={{ color: 'var(--text-mute)', fontSize: 13, marginTop: 12 }}>
-          Could not sign up. Please try again.
+          {state === 'invalid' ? 'Enter a valid email address.' : 'Could not sign up. Please try again.'}
         </p>
       )}
     </div>

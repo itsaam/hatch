@@ -16,15 +16,13 @@ npm install -g @hatchpr/cli
 curl -fsSL https://hatchpr.dev/install.sh | sh
 ```
 
-### Go install (if you have Go)
-```bash
-go install github.com/itsaam/hatch/cli@latest
-```
-
-### From source
+### From source with Go
 ```bash
 git clone https://github.com/itsaam/hatch && cd hatch/cli && go build -o hatch .
 ```
+
+Use `go build -o hatch` to name the executable `hatch`. Running `go install`
+on the `github.com/itsaam/hatch/cli` module installs a binary named `cli`.
 
 Cross-compile:
 
@@ -55,7 +53,7 @@ That release includes progress text on stdout.
 
 | Signal | Detected as |
 |---|---|
-| `docker-compose.yml` | Best-effort Compose conversion. Review the service ports and move custom startup commands into the corresponding Dockerfiles. |
+| `docker-compose.yml` | Best-effort Compose conversion. Review ports and move custom startup commands into Dockerfiles. Nested build contexts require the Kubernetes runtime. |
 | `package.json` with `next` + `prisma`/`pg` | Next.js + Postgres |
 | `package.json` with `next` | Next.js |
 | `package.json` with `express`/`fastify` | Node API (+ Postgres if `pg`) |

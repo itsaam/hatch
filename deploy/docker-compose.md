@@ -1,8 +1,10 @@
 # Deploy Hatch with Docker Compose
 
 Prepare a Linux server with Docker and Traefik. Dokploy is one way to run
-Traefik. The external Docker network `dokploy-network` must exist. Point the
-site, API and wildcard preview hostnames to the server's ingress.
+Traefik. The external Docker network `dokploy-network` must exist. The Compose
+labels use Traefik's `websecure` entrypoint and a `letsencrypt` certificate
+resolver. Point the site, API and wildcard preview hostnames to the server's
+ingress.
 
 ```bash
 git clone https://github.com/itsaam/hatch /opt/hatch
@@ -16,7 +18,8 @@ Set the PostgreSQL credentials, `HATCH_DOMAIN`, `ALLOWED_ORIGIN` and
 store the app's private key at `/etc/hatch/secrets/github-app.pem` with
 restricted permissions. Point the app webhook to the API's
 `/api/github/webhook` route and subscribe to `pull_request` and
-`issue_comment`.
+`issue_comment`. Grant the app Contents and Pull requests read access and Issues read and write
+access for PR comments.
 
 Set `HATCH_TRUSTED_PROXY_CIDRS` to the networks of proxies that sanitize or
 append `X-Forwarded-For`. Leave preview networks out of this list. If you

@@ -229,9 +229,10 @@ footer.foot a { color: var(--text-mute); }
 
     <h2 id="quickstart">Quickstart</h2>
     <ol>
-      <li>Install and configure a GitHub App for your Hatch instance. Subscribe to <code>pull_request</code> and <code>issue_comment</code>, and install the app on a repository whose owner is allowed by Hatch.</li>
+      <li>Install the <a href="https://github.com/apps/hatchpr">HatchPR GitHub App</a> for your instance, or <a href="#github-app">configure your own GitHub App</a> when self-hosting. Use a repository whose owner is allowed by Hatch.</li>
       <li>Add a <code>Dockerfile</code> and this <code>.hatch.yml</code> at the repository root. Set <code>port</code> to your app's listening port.</li>
     </ol>
+
 <pre><code data-language="yaml">version: 1
 services:
   web:
@@ -243,13 +244,16 @@ services:
       <li>Wait for Hatch to post the preview link. Comment again after pushing a commit to update the preview. Closing the PR removes the preview.</li>
     </ol>
 
+    <h3 id="github-app">GitHub App permissions</h3>
+    <p>For a self-hosted GitHub App, give the app read access to Contents and Pull requests, and read and write access to Issues so it can post and update PR comments. Subscribe to <code>pull_request</code> and <code>issue_comment</code> and use <code>/api/github/webhook</code> on your Hatch API. See <a href="https://docs.github.com/en/webhooks/webhook-events-and-payloads#issue_comment">GitHub's webhook reference</a>.</p>
+
     <h3 id="pourquoi">When to add <code>.hatch.yml</code></h3>
     <p>A root <code>Dockerfile</code> is enough for a single web service. Use <code>.hatch.yml</code> to set an explicit port, add services, seed a database or change when builds run.</p>
 
     <h2 id="cli">Generate a configuration with the CLI</h2>
     <p>Run this at the root of your repository to preview the generated configuration:</p>
 <pre><code data-language="shell">npx @hatchpr/cli init --dry-run</code></pre>
-    <p>Run <code>npx @hatchpr/cli init</code> to write the file. Use <code>--output</code> to choose a path, <code>--verbose</code> for detection details, or <code>--force</code> to overwrite an existing file. Review the generated configuration before committing it.</p>
+    <p>Run <code>npx @hatchpr/cli init</code> to write the file. Use <code>--output</code> to choose a path, <code>--verbose</code> for detection details, or <code>--force</code> to overwrite an existing file. Review the generated configuration before committing it. For tooling that parses stdout, use the <a href="https://github.com/itsaam/hatch/tree/main/cli#from-source-with-go">source build</a> if you have CLI <code>v0.1.4</code>, which mixes progress text with the YAML.</p>
 
     <h2 id="templates">Templates</h2>
     <p>Start from a sample repository under an owner allowed by your Hatch instance:</p>
@@ -278,7 +282,7 @@ services:
         <tr><td><code>limits</code></td><td>Set per-service CPU and memory limits.</td></tr>
       </tbody>
     </table>
-    <p>For Kubernetes builds, <code>build</code> selects a directory in the GitHub archive. For portability across runtimes, use <code>build: .</code> and an explicit <code>dockerfile</code> path.</p>
+    <p>For Kubernetes builds, <code>build</code> selects a directory in the GitHub archive. The Docker runtime uses the repository root as its build context. To support both runtimes, set <code>build: .</code> and use a <code>dockerfile</code> path relative to the repository root.</p>
 
     <h3 id="limits">Resource limits</h3>
     <p>Hatch defaults to 1 GiB of memory and 1 CPU per service. Memory accepts <code>k</code>, <code>m</code> and <code>g</code> in powers of 1024. CPU accepts fractional cores up to 16. Namespace quotas can further limit Kubernetes previews.</p>

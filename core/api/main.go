@@ -285,13 +285,13 @@ func subscribeHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil {
-			writeOK(w)
+			http.Error(w, "invalid subscription request", http.StatusBadRequest)
 			return
 		}
 
 		email := strings.ToLower(strings.TrimSpace(body.Email))
 		if !validEmail(email) {
-			writeOK(w)
+			http.Error(w, "invalid email address", http.StatusBadRequest)
 			return
 		}
 

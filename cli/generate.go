@@ -32,13 +32,13 @@ func Generate(r *DetectResult) string {
 		}
 	}
 	if r.Seed != nil {
-		fmt.Fprintf(&b, "\nseed:\n  after: %s\n  sql: %s\n", r.Seed.After, quoteIfNeeded(r.Seed.SQL))
+		fmt.Fprintf(&b, "\nseed:\n  after: %s\n  sql: %s\n", quoteIfNeeded(r.Seed.After), quoteIfNeeded(r.Seed.SQL))
 	}
 	return b.String()
 }
 
 func writeService(b *strings.Builder, s Service, entries []EnvEntry, source string) {
-	fmt.Fprintf(b, "  %s:\n", s.Name)
+	fmt.Fprintf(b, "  %s:\n", quoteIfNeeded(s.Name))
 	if s.Image != "" {
 		fmt.Fprintf(b, "    image: %s\n", quoteIfNeeded(s.Image))
 	} else {
@@ -59,7 +59,11 @@ func writeService(b *strings.Builder, s Service, entries []EnvEntry, source stri
 	}
 	writeEnv(b, s.Env, entries, source)
 	if len(s.DependsOn) > 0 {
-		fmt.Fprintf(b, "    depends_on: [%s]\n", strings.Join(s.DependsOn, ", "))
+		dependencies := make([]string, 0, len(s.DependsOn))
+		for _, name := range s.DependsOn {
+			dependencies = append(dependencies, quoteIfNeeded(name))
+		}
+		fmt.Fprintf(b, "    depends_on: [%s]\n", strings.Join(dependencies, ", "))
 	}
 	if s.Healthcheck != nil {
 		fmt.Fprintf(b, "    healthcheck:\n      cmd: %s\n", quoteIfNeeded(s.Healthcheck.Cmd))
@@ -105,14 +109,15 @@ func writeEnv(b *strings.Builder, env map[string]string, entries []EnvEntry, sou
 	}
 }
 
-// Keep plain scalars readable when they round-trip as the same string.
+// Encode the string with YAML's quoting rules, including legacy scalar types.
 func quoteIfNeeded(value string) string {
-	var doc yaml.Node
-	if !strings.ContainsAny(value, "\r\n\t") && yaml.Unmarshal([]byte(value), &doc) == nil && len(doc.Content) == 1 {
-		node := doc.Content[0]
-		if node.Kind == yaml.ScalarNode && node.Tag == "!!str" && node.Style == 0 && node.Value == value {
-			return value
+	encoded, err := yaml.Marshal(value)
+	if err == nil {
+		scalar := strings.TrimSuffix(string(encoded), "\n")
+		if !strings.ContainsRune(scalar, '\n') {
+			return scalar
 		}
 	}
+	// A quoted scalar fits the generator even when the encoder prefers a block.
 	return strconv.Quote(value)
 }

@@ -293,6 +293,7 @@ func TestGenerateRoundTrip(t *testing.T) {
 
 func TestGeneratePreservesComposeDockerfileAndEnv(t *testing.T) {
 	r, err := Detect(newMemFS(map[string]string{
+		"package.json": `{"dependencies":{"express":"4"}}`,
 		"compose.yaml": `services:
   web:
     build:
@@ -308,6 +309,9 @@ func TestGeneratePreservesComposeDockerfileAndEnv(t *testing.T) {
 	}))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if r.Manifest != "compose.yaml" {
+		t.Fatalf("manifest = %q, want compose.yaml", r.Manifest)
 	}
 	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "startup command") {
 		t.Fatalf("warnings = %v, want Compose startup command warning", r.Warnings)
@@ -340,6 +344,38 @@ func TestDetectDockerfileOnlyLetsRuntimeInferPort(t *testing.T) {
 	}
 	if r.Services[0].Port != 0 || !r.Services[0].Expose {
 		t.Fatalf("Dockerfile-only service = %+v", r.Services[0])
+	}
+}
+
+func TestGenerateQuotesAmbiguousServiceNamesAndValues(t *testing.T) {
+	r := &DetectResult{
+		Services: []Service{
+			{Name: "web", Build: ".", DependsOn: []string{"null"}, Env: map[string]string{"MODE": "off", "DURATION": "1:12"}},
+			{Name: "null", Image: "postgres:16-alpine"},
+		},
+		Seed: &Seed{After: "null", SQL: "seed.sql"},
+	}
+	y := Generate(r)
+	for _, expected := range []string{
+		`  "null":`, `depends_on: ["null"]`, `after: "null"`, `MODE: "off"`, `DURATION: "1:12"`,
+	} {
+		if !strings.Contains(y, expected) {
+			t.Errorf("generated config missing %q:\n%s", expected, y)
+		}
+	}
+}
+
+func TestComposeWarnsAboutNestedContextAndRejectsInvalidDockerfile(t *testing.T) {
+	const compose = "services:\n  web:\n    build:\n      context: ./app\n      dockerfile: %s\n    ports: [\"8080:80\"]\n"
+	r, err := Detect(newMemFS(map[string]string{"compose.yaml": fmt.Sprintf(compose, "Dockerfile.preview")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "repository root") {
+		t.Fatalf("warnings = %v, want Docker build context warning", r.Warnings)
+	}
+	if _, err := Detect(newMemFS(map[string]string{"compose.yaml": fmt.Sprintf(compose, "../Dockerfile")})); err == nil {
+		t.Fatal("expected the unsupported Dockerfile path to be rejected")
 	}
 }
 

@@ -193,14 +193,8 @@ func confirm(ui *UI, prompt string) bool {
 }
 
 func reportDetection(ui *UI, filesys FS, r *DetectResult, verbose bool) {
-	// Found a package.json / Gemfile / etc
-	seen := map[string]bool{}
-	for _, f := range []string{"package.json", "Gemfile", "pyproject.toml", "requirements.txt", "docker-compose.yml", "docker-compose.yaml", "compose.yml"} {
-		if filesys.Exists(f) && !seen[f] {
-			ui.OK(fmt.Sprintf("Found %s (%s)", f, r.StackName))
-			seen[f] = true
-			break
-		}
+	if r.Manifest != "" {
+		ui.OK(fmt.Sprintf("Found %s (%s)", r.Manifest, r.StackName))
 	}
 	if filesys.Exists("prisma/schema.prisma") {
 		ui.OK("Found prisma/ (Prisma ORM)")
