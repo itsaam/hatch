@@ -165,6 +165,20 @@ webhook to `https://<api-host>/api/github/webhook` and subscribe to
 repository, comment `@hatchpr preview`, and confirm the external build, image pull, HTTPS preview and cleanup
 on PR close.
 
+## Migrate from Docker Compose
+
+1. Back up the legacy PostgreSQL database and test its restoration. Recover
+   the existing GitHub App configuration and encryption key from the secret
+   store. After restoring the target database, verify it can decrypt existing
+   repository secrets and account for legacy preview records.
+2. Test one real PR before cutover. Confirm the GitHub App receives
+   `issue_comment`, the builder pushes its image, Kubernetes pulls it, and the
+   preview serves HTTPS. Verify SQL seeding, logs, the GitHub comment and cleanup
+   on close.
+3. Stop the old instance before switching the site, API and preview routing.
+   Route GitHub webhooks to the ready API. Retain the original volume and
+   configuration for rollback and plan how to handle writes made after cutover.
+
 ## Add a preview namespace
 
 Copy an existing slot directory under [base/previews](base/previews/), change
