@@ -13,6 +13,7 @@ import (
 var (
 	errAwaitingGitHub     = errors.New("GitHub pull request state does not match the delivery")
 	errSupersededDelivery = errors.New("a newer GitHub state superseded the delivery")
+	errStaleOwnerApproval = errors.New("pull request changed after the owner approval")
 )
 
 type kubePullIntent uint8
@@ -37,6 +38,10 @@ func (d *Deployer) githubPullState(ctx context.Context, ref PreviewRef) (*pullSt
 }
 
 func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, intent kubePullIntent, commentID int64, read pullStateReader) (bool, error) {
+	return d.queueKubeObservedPullRequest(ctx, ref, intent, commentID, false, nil, read)
+}
+
+func (d *Deployer) queueKubeObservedPullRequest(ctx context.Context, ref PreviewRef, intent kubePullIntent, commentID int64, pinned bool, approvedAt *time.Time, read pullStateReader) (bool, error) {
 	var queued bool
 	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
 		// GitHub webhook timestamps cannot order changes within one second.
@@ -57,6 +62,9 @@ func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, int
 			return errors.New("invalid GitHub pull request state")
 		}
 		closed := pr.State == "closed"
+		if approvedAt != nil && closed {
+			return nil
+		}
 		if !closed {
 			if intent == kubePullClosed {
 				return errAwaitingGitHub
@@ -70,15 +78,31 @@ func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, int
 			if intent == kubePullChanged && pr.Head.SHA != ref.SHA {
 				return errAwaitingGitHub
 			}
+			if pinned && pr.Head.SHA != ref.SHA {
+				// This command observed a different head. Record it without
+				// scheduling a build, so a redelivery cannot build the new head.
+				return nil
+			}
 			ref.SHA, ref.Branch = pr.Head.SHA, pr.Head.Ref
 		}
 
-		tag, err := tx.Exec(ctx, `INSERT INTO kube_pull_request_events (repo_full_name, pr_number, head_sha, closed)
-			VALUES ($1,$2,$3,$4) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
-			SET head_sha=EXCLUDED.head_sha, closed=EXCLUDED.closed
-			WHERE kube_pull_request_events.closed IS DISTINCT FROM EXCLUDED.closed
-			   OR kube_pull_request_events.head_sha IS DISTINCT FROM EXCLUDED.head_sha
-			   OR $5::boolean`, ref.Repo, ref.PR, pr.Head.SHA, closed, intent == kubePullRedeploy && !closed)
+		tag, err := tx.Exec(ctx, `INSERT INTO kube_pull_request_events AS previous
+			(repo_full_name, pr_number, head_sha, closed, owner_approved_at)
+			SELECT $1,$2,$3,$4,$6::timestamptz
+			WHERE $6::timestamptz IS NULL OR NOT EXISTS (
+			    SELECT 1 FROM kube_github_deliveries
+			    WHERE lower(repo_full_name)=lower($1) AND pr_number=$2 AND closed
+			      AND source_updated_at >= $6
+			)
+			ON CONFLICT (repo_full_name, pr_number) DO UPDATE
+			SET head_sha=EXCLUDED.head_sha, closed=EXCLUDED.closed,
+			    owner_approved_at=COALESCE(EXCLUDED.owner_approved_at, previous.owner_approved_at)
+			WHERE ($6::timestamptz IS NULL OR
+			      ((previous.last_closed_at IS NULL OR previous.last_closed_at < $6)
+			   AND (previous.owner_approved_at IS NULL OR previous.owner_approved_at <= $6)))
+			  AND (previous.closed IS DISTINCT FROM EXCLUDED.closed
+			    OR previous.head_sha IS DISTINCT FROM EXCLUDED.head_sha
+			    OR $5::boolean)`, ref.Repo, ref.PR, pr.Head.SHA, closed, intent == kubePullRedeploy && !closed, approvedAt)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -91,6 +115,31 @@ func (d *Deployer) queueKubePullRequest(ctx context.Context, ref PreviewRef, int
 	return queued && err == nil, err
 }
 
+func (d *Deployer) queueKubeOwnerClose(ctx context.Context, ref PreviewRef, closedAt time.Time) error {
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		if err := lockKubeGitHubPR(ctx, tx, &ref); err != nil {
+			return err
+		}
+		// The signed close also fences old commands after a reopen. GitHub
+		// timestamps have second precision, so a close wins an ambiguous tie.
+		var closesPreview bool
+		err := tx.QueryRow(ctx, `INSERT INTO kube_pull_request_events AS previous
+			(repo_full_name, pr_number, head_sha, closed, last_closed_at)
+			VALUES ($1,$2,$3,true,$4) ON CONFLICT (repo_full_name, pr_number) DO UPDATE
+			SET last_closed_at=EXCLUDED.last_closed_at,
+			    closed=previous.owner_approved_at IS NULL OR previous.owner_approved_at <= EXCLUDED.last_closed_at
+			WHERE previous.last_closed_at IS NULL OR previous.last_closed_at < EXCLUDED.last_closed_at
+			RETURNING closed`, ref.Repo, ref.PR, ref.SHA, closedAt).Scan(&closesPreview)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil || !closesPreview {
+			return err
+		}
+		return queueKubePreviewTx(ctx, tx, ref, false)
+	})
+}
+
 func lockKubeGitHubPR(ctx context.Context, tx pgx.Tx, ref *PreviewRef) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(
 		'hatch-kube-pr:' || lower($1::text) || '#' || $2::integer::text, 0))`, ref.Repo, ref.PR); err != nil {
@@ -99,7 +148,9 @@ func lockKubeGitHubPR(ctx context.Context, tx pgx.Tx, ref *PreviewRef) error {
 	// Reuse the existing spelling so case-only renames cannot claim a second
 	// slot. Preserve GitHub's spelling for new rows and existing secret keys.
 	return tx.QueryRow(ctx, `SELECT COALESCE((SELECT repo_full_name FROM previews
-		WHERE lower(repo_full_name)=lower($1) AND pr_number=$2 ORDER BY id LIMIT 1), $1)`, ref.Repo, ref.PR).Scan(&ref.Repo)
+		WHERE lower(repo_full_name)=lower($1) AND pr_number=$2 ORDER BY id LIMIT 1),
+		(SELECT repo_full_name FROM kube_pull_request_events
+		WHERE lower(repo_full_name)=lower($1) AND pr_number=$2 ORDER BY repo_full_name LIMIT 1), $1)`, ref.Repo, ref.PR).Scan(&ref.Repo)
 }
 
 func queueKubePreviewTx(ctx context.Context, tx pgx.Tx, ref PreviewRef, deploy bool) error {
@@ -188,6 +239,9 @@ func (d *Deployer) runKubeWebhookWorker(ctx context.Context) {
 }
 
 func (d *Deployer) kubeAutoBuildAllowed(ctx context.Context, ref PreviewRef) (bool, error) {
+	if d.previewOwnerOnly {
+		return false, nil
+	}
 	decision, err := automaticPreviewTrigger(ctx, d.httpExt, d.app, ref)
 	return decision == decisionBuild, err
 }
@@ -218,6 +272,13 @@ func (d *Deployer) processKubeWebhook(ctx context.Context, read pullStateReader,
 	}
 	attempt, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
+	if closed && d.previewOwnerOnly && sourceUpdatedAt != nil {
+		if err := d.queueKubeOwnerClose(attempt, ref, *sourceUpdatedAt); err != nil {
+			return true, err
+		}
+		_, err := d.pool.Exec(ctx, `DELETE FROM kube_github_deliveries WHERE id=$1`, id)
+		return true, err
+	}
 	if !closed {
 		allowed, err := autoAllowed(attempt, ref)
 		if err != nil && !errors.Is(err, errInvalidCompose) {

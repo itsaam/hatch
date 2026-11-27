@@ -39,6 +39,7 @@ type prEvent struct {
 	PullRequest struct {
 		HTMLURL   string    `json:"html_url"`
 		UpdatedAt time.Time `json:"updated_at"`
+		ClosedAt  time.Time `json:"closed_at"`
 		Head      struct {
 			Ref  string `json:"ref"`
 			SHA  string `json:"sha"`
@@ -116,7 +117,7 @@ func (n *prNotifier) OnHibernated(ctx context.Context, ref PreviewRef, days int)
 	_ = ctx
 }
 
-func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string) http.HandlerFunc {
+func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string, ownerCommandOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 		if err != nil {
@@ -135,7 +136,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			return
 		}
 		if event == "issue_comment" {
-			handleIssueCommentEvent(w, r, body, pool, deployer, app, allowedOwners, botHandle)
+			handleIssueCommentEvent(w, r, body, pool, deployer, app, allowedOwners, botHandle, ownerCommandOnly)
 			return
 		}
 		if event != "pull_request" {
@@ -192,6 +193,10 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
+			if ownerCommandOnly {
+				writeOK(w)
+				return
+			}
 			if deployer.kube != nil {
 				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged, ev.PullRequest.UpdatedAt); err != nil {
 					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
@@ -247,7 +252,15 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		case "closed":
 			if deployer.kube != nil {
-				if err := deployer.storeKubeWebhook(ctx, ref, kubePullClosed, ev.PullRequest.UpdatedAt); err != nil {
+				eventAt := ev.PullRequest.UpdatedAt
+				if ownerCommandOnly {
+					if ev.PullRequest.ClosedAt.IsZero() {
+						http.Error(w, "missing pull request closure time", http.StatusBadRequest)
+						return
+					}
+					eventAt = ev.PullRequest.ClosedAt
+				}
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullClosed, eventAt); err != nil {
 					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
 					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
 					return

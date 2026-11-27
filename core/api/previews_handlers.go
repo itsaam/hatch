@@ -381,6 +381,10 @@ func previewLogsStreamHandler(pool *pgxpool.Pool, deployer *Deployer) http.Handl
 // previewRedeployHandler queues a redeploy for an existing preview.
 func previewRedeployHandler(pool *pgxpool.Pool, deployer *Deployer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if deployer.previewOwnerOnly {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview requires a pinned GitHub command from the repository owner"})
+			return
+		}
 		repo, pr, ok := parsePreviewPath(w, r)
 		if !ok {
 			return

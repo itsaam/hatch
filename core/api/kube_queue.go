@@ -151,6 +151,20 @@ func (d *Deployer) runKubeOperation(ctx context.Context, job kubeOperation) {
 
 func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 	ref := job.ref
+	if d.previewOwnerOnly {
+		checkCtx, stop := context.WithTimeout(ctx, 8*time.Second)
+		_, err := d.ownerPreviewJobPullState(checkCtx, job)
+		stop()
+		if errors.Is(err, errStaleOwnerApproval) {
+			d.failKubeDeploy(ctx, job, err)
+			return
+		}
+		if err != nil {
+			log.Printf("check owner approval %s#%d: %v", ref.Repo, ref.PR, err)
+			d.releaseKubeOperation(job, 15)
+			return
+		}
+	}
 	if !d.updateKubeStatus(ctx, job, "building") {
 		d.releaseKubeOperation(job, 0)
 		return
@@ -181,11 +195,7 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 		return
 	}
 	if err != nil {
-		log.Printf("deploy Kubernetes preview %s#%d: %v", ref.Repo, ref.PR, scrubToken(err))
-		if _, err := d.pool.Exec(ctx, `UPDATE kube_operations SET operation='failed_cleanup', available_at=NOW() WHERE id=$1`, job.id); err != nil {
-			log.Printf("queue Kubernetes cleanup %s#%d: %v", ref.Repo, ref.PR, err)
-			d.releaseKubeOperation(job, 30)
-		}
+		d.failKubeDeploy(ctx, job, err)
 		return
 	}
 	publicURL := ""
@@ -193,6 +203,15 @@ func (d *Deployer) runKubeDeploy(ctx context.Context, job kubeOperation) {
 		publicURL = "https://" + host
 	}
 	d.completeKubeOperation(ctx, job, "running", publicURL)
+}
+
+func (d *Deployer) failKubeDeploy(ctx context.Context, job kubeOperation, err error) {
+	ref := job.ref
+	log.Printf("deploy Kubernetes preview %s#%d: %v", ref.Repo, ref.PR, scrubToken(err))
+	if _, err := d.pool.Exec(ctx, `UPDATE kube_operations SET operation='failed_cleanup', available_at=NOW() WHERE id=$1`, job.id); err != nil {
+		log.Printf("queue Kubernetes cleanup %s#%d: %v", ref.Repo, ref.PR, err)
+		d.releaseKubeOperation(job, 30)
+	}
 }
 
 func (d *Deployer) cancelSupersededDeploy(ctx context.Context, id int64, cancel context.CancelFunc) {
@@ -247,7 +266,13 @@ func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOper
 		if err := d.checkKubePublication(ctx, job); err != nil {
 			return err
 		}
-		current, err := read(ctx, job.ref)
+		var current *pullState
+		var err error
+		if d.previewOwnerOnly {
+			current, err = d.ownerPreviewJobPullState(ctx, job)
+		} else {
+			current, err = read(ctx, job.ref)
+		}
 		if err != nil {
 			return err
 		}
@@ -265,6 +290,23 @@ func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOper
 	// GitHub may change before the webhook reaches us. Recheck both sources
 	// so the worker can tear down the superseded slot under its PR lock.
 	return check()
+}
+
+func (d *Deployer) ownerPreviewJobPullState(ctx context.Context, job kubeOperation) (*pullState, error) {
+	var approvedAt *time.Time
+	err := d.pool.QueryRow(ctx, `SELECT s.owner_approved_at FROM kube_operations op
+		LEFT JOIN kube_pull_request_events s USING (repo_full_name, pr_number)
+		WHERE op.id=$1 AND s.head_sha=$2`, job.id, job.ref.SHA).Scan(&approvedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errStaleOwnerApproval
+	}
+	if err != nil {
+		return nil, err
+	}
+	if approvedAt == nil || d.app == nil || job.ref.InstallationID == 0 {
+		return nil, errStaleOwnerApproval
+	}
+	return d.app.ownerPreviewPullState(ctx, job.ref, *approvedAt)
 }
 
 func (d *Deployer) checkKubePublication(ctx context.Context, job kubeOperation) error {

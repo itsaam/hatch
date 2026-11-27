@@ -55,6 +55,9 @@ var migrationKubeGitHubDeliveries string
 //go:embed migrations/011_kube_github_delivery_time.sql
 var migrationKubeGitHubDeliveryTime string
 
+//go:embed migrations/012_kube_owner_preview_order.sql
+var migrationKubeOwnerPreviewOrder string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -75,6 +78,10 @@ func main() {
 	allowedOwners := parseAllowedOwners(mustEnv("HATCH_ALLOWED_OWNERS"))
 	if len(allowedOwners) == 0 {
 		log.Fatalf("HATCH_ALLOWED_OWNERS must list at least one owner (csv)")
+	}
+	ownerCommandOnly, err := strconv.ParseBool(getenv("HATCH_PREVIEW_OWNER_ONLY", "false"))
+	if err != nil {
+		log.Fatal("HATCH_PREVIEW_OWNER_ONLY must be a boolean")
 	}
 	hatchNetwork := getenv("HATCH_NETWORK", "hatch_public")
 	hatchDomain := getenv("HATCH_DOMAIN", "localhost")
@@ -102,7 +109,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries, migrationKubeGitHubDeliveryTime} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries, migrationKubeGitHubDeliveryTime, migrationKubeOwnerPreviewOrder} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
@@ -146,6 +153,7 @@ func main() {
 
 	deployer.SetNotifier(&prNotifier{pool: pool, app: appClient})
 	deployer.SetAppClient(appClient)
+	deployer.previewOwnerOnly = ownerCommandOnly
 
 	reconcileCtx, reconcileCancel := context.WithTimeout(rootCtx, 30*time.Second)
 	if err := deployer.Reconcile(reconcileCtx, pool); err != nil {
@@ -198,7 +206,7 @@ func main() {
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
-	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners, botHandle))
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners, botHandle, ownerCommandOnly))
 
 	// Secret store — gated by HATCH_ADMIN_TOKEN (bearer). See secrets_handlers.go.
 	r.Route("/api/secrets", func(r chi.Router) {

@@ -78,8 +78,14 @@ system Ingress TLS block and leave `HATCH_KUBE_TLS_SECRET` empty, then configure
 the cluster ingress HTTP entrypoint accordingly. Confirm wildcard DNS and edge
 certificate coverage before using a test hostname. See [Cloudflare Tunnel routing](https://developers.cloudflare.com/tunnel/concepts/routing/).
 
-The [Sunny overlay](overlays/sunny/) uses `hatchpr.dev` and `api.hatchpr.dev`
-with the `traefik-kubernetes` ingress class. It expects HTTPS at Cloudflare and
+The [Sunny overlay](overlays/sunny/) enables `HATCH_PREVIEW_OWNER_ONLY`.
+Only the GitHub repository owner can run preview commands. PR events cannot
+start builds. The bot asks the owner to confirm the exact head with
+`@hatchpr preview <commit-sha>`. To redeploy on Sunny, use the same command.
+Closing a PR removes its preview. Reopening requires a fresh confirmation.
+
+Sunny uses `hatchpr.dev` and `api.hatchpr.dev` with the
+`traefik-kubernetes` ingress class. It expects HTTPS at Cloudflare and
 HTTP from the connector to Traefik; route `www.hatchpr.dev` to the canonical site
 with a redirect at the edge. Before syncing, set the real builder address and
 server name through `hatch-api-env`, configure the registry credentials, and

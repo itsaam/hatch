@@ -12,6 +12,7 @@ configMapGenerator:
       - HATCH_PUBLIC_API_URL=https://api.hatchpr.dev
       - HATCH_DOMAIN=hatchpr.dev
       - HATCH_ALLOWED_OWNERS=itsaam
+      - HATCH_PREVIEW_OWNER_ONLY=true
       - HATCH_TRUSTED_PROXY_CIDRS=10.42.0.0/24,10.254.251.2/32
       - HATCH_REGISTRY_PREFIX=ghcr.io/itsaam/hatch-previews
       - HATCH_KUBE_INGRESS_CLASS=traefik-kubernetes

@@ -25,9 +25,10 @@ type issueCommentEvent struct {
 		} `json:"user"`
 	} `json:"issue"`
 	Comment struct {
-		ID   int64  `json:"id"`
-		Body string `json:"body"`
-		User struct {
+		ID        int64     `json:"id"`
+		Body      string    `json:"body"`
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
 			Login string `json:"login"`
 			Type  string `json:"type"` // "Bot" / "User"
 		} `json:"user"`
@@ -60,7 +61,7 @@ const (
 // handleIssueCommentEvent handles the `issue_comment` webhook event. It
 // reuses the same authorization gates as the `pull_request` handler (owner
 // allowlist + bot/Bot guard) and routes the parsed verb to the deployer.
-func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte, pool *pgxpool.Pool, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string) {
+func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte, pool *pgxpool.Pool, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string, ownerCommandOnly bool) {
 	var ev issueCommentEvent
 	if err := json.Unmarshal(body, &ev); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -91,9 +92,14 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	}
 
-	verb, mentioned := parseMention(ev.Comment.Body, botHandle)
-	if !mentioned {
+	verb, requestedSHA := parseMention(ev.Comment.Body, botHandle)
+	if verb == verbNone {
 		writeOK(w)
+		return
+	}
+	if ownerCommandOnly && !strings.EqualFold(ev.Comment.User.Login, owner) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"ok":true,"skipped":"owner command required"}`))
 		return
 	}
 
@@ -126,16 +132,41 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	}
 
-	authorized, err := commenterAuthorized(ctx, app, ev.Installation.ID, owner, repo, ev.Comment.User.Login, pr.User.Login)
-	if err != nil {
-		log.Printf("issue_comment: authz %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
+	if !ownerCommandOnly {
+		authorized, err := commenterAuthorized(ctx, app, ev.Installation.ID, owner, repo, ev.Comment.User.Login, pr.User.Login)
+		if err != nil {
+			log.Printf("issue_comment: authz %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
+		if !authorized {
+			_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionUnauthz)
+			writeOK(w)
+			return
+		}
 	}
-	if !authorized {
-		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionUnauthz)
-		writeOK(w)
-		return
+
+	if verb == verbDeploy && pr.State == "open" {
+		if requestedSHA != "" {
+			if !strings.EqualFold(requestedSHA, pr.Head.SHA) {
+				_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number,
+					"That commit is no longer the head of this PR. Request a new preview for the current commit.")
+				writeOK(w)
+				return
+			}
+		} else if ownerCommandOnly {
+			if !buildCommitPattern.MatchString(pr.Head.SHA) {
+				http.Error(w, "invalid pull request head", http.StatusBadGateway)
+				return
+			}
+			reply := fmt.Sprintf("Review the commit and confirm with `@%s preview %s`.", strings.TrimPrefix(botHandle, "@"), pr.Head.SHA)
+			if _, err := app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, reply); err != nil {
+				http.Error(w, "internal", http.StatusInternalServerError)
+				return
+			}
+			writeOK(w)
+			return
+		}
 	}
 
 	ref := PreviewRef{
@@ -157,8 +188,27 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		// deployer's notifier has a comment id to update.
 		var err error
 		if deployer.kube != nil {
+			var approvedAt *time.Time
+			read := deployer.githubPullState
+			if ownerCommandOnly {
+				if ev.Comment.CreatedAt.IsZero() || ev.Comment.ID <= 0 {
+					http.Error(w, "missing comment identity or creation time", http.StatusBadRequest)
+					return
+				}
+				approvedAt = &ev.Comment.CreatedAt
+				read = func(ctx context.Context, ref PreviewRef) (*pullState, error) {
+					return app.ownerPreviewPullState(ctx, ref, *approvedAt)
+				}
+			}
 			var queued bool
-			queued, err = deployer.queueKubePullRequest(ctx, ref, kubePullRedeploy, ev.Comment.ID, deployer.githubPullState)
+			queued, err = deployer.queueKubeObservedPullRequest(ctx, ref, kubePullRedeploy, ev.Comment.ID,
+				requestedSHA != "", approvedAt, read)
+			if errors.Is(err, errStaleOwnerApproval) {
+				_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number,
+					"The PR changed after this command was created. Confirm the current commit again after reopening.")
+				writeOK(w)
+				return
+			}
 			if err == nil && !queued {
 				writeOK(w)
 				return
@@ -261,38 +311,44 @@ func ensureMentionStickyComment(ctx context.Context, pool *pgxpool.Pool, app *Ap
 
 // parseMention recognizes an explicit command after the bot's exact handle.
 // Matching is case-insensitive.
-func parseMention(body, botHandle string) (commentVerb, bool) {
+func parseMention(body, botHandle string) (commentVerb, string) {
 	if botHandle == "" {
-		return verbNone, false
+		return verbNone, ""
 	}
 	body = strings.ToLower(body)
 	handle := "@" + strings.ToLower(strings.TrimPrefix(botHandle, "@"))
 	command := strings.Fields(body)
-	if len(command) == 2 && command[0] == handle && command[1] == "preview" {
-		return verbDeploy, true
+	if len(command) >= 2 && command[0] == handle && command[1] == "preview" {
+		if len(command) == 2 {
+			return verbDeploy, ""
+		}
+		if len(command) == 3 && buildCommitPattern.MatchString(command[2]) {
+			return verbDeploy, command[2]
+		}
+		return verbNone, ""
 	}
 	idx := strings.Index(body, handle)
 	if idx < 0 {
-		return verbNone, false
+		return verbNone, ""
 	}
 	// Boundary check before the @ — must be at start, or preceded by a
 	// non-word character. Avoids matching e.g. `mail@hatchpr.dev`.
 	if idx > 0 && isWordChar(body[idx-1]) {
-		return verbNone, false
+		return verbNone, ""
 	}
 	rest := body[idx+len(handle):]
 	if len(rest) == 0 || !strings.ContainsRune(" \t\r\n", rune(rest[0])) {
-		return verbNone, false
+		return verbNone, ""
 	}
 	words := strings.Fields(rest)
 	if len(words) == 0 {
-		return verbNone, false
+		return verbNone, ""
 	}
 	switch strings.Trim(words[0], ".,!?:;`*_-") {
 	case "delete", "destroy", "down", "kill", "stop":
-		return verbDestroy, true
+		return verbDestroy, ""
 	default:
-		return verbNone, false
+		return verbNone, ""
 	}
 }
 

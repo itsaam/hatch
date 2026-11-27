@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -50,7 +53,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries, migrationKubeGitHubDeliveryTime} {
+	for _, migration := range []string{migrationPreviews, migrationPreviewsComment, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries, migrationKubeGitHubDeliveryTime, migrationKubeOwnerPreviewOrder} {
 		mustExec(pool, migration)
 	}
 	d, err := NewDeployer(pool, "unused", "hatch.example.org", 1)
@@ -297,6 +300,12 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	}
 
 	commandReader := reader(fixturePull(newHead, "open"))
+	if queued, err := d.queueKubeObservedPullRequest(ctx, ref, kubePullRedeploy, 124, true, nil, commandReader); queued || err != nil {
+		t.Fatalf("command for an old head queued a build: queued=%v, err=%v", queued, err)
+	}
+	if queued, err := d.queueKubePullRequest(ctx, newHead, kubePullRedeploy, 124, commandReader); queued || err != nil {
+		t.Fatalf("redelivery of an old command queued the new head: queued=%v, err=%v", queued, err)
+	}
 	if queued, err := d.queueKubePullRequest(ctx, newHead, kubePullRedeploy, 125, commandReader); !queued || err != nil {
 		t.Fatalf("deploy command: queued=%v, err=%v", queued, err)
 	}
@@ -316,6 +325,9 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	}
 	mustClaim("deploy")
 
+	testOwnerWebhookEnqueue(t, d)
+	testOwnerCloseOrdering(t, d)
+
 	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
 	if _, err := d.queueKubePullRequest(ctx, newHead, kubePullClosed, 0, reader(fixturePull(newHead, "closed"))); err == nil {
 		t.Fatal("expected the queue write to fail")
@@ -323,6 +335,151 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT status FROM previews WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&state); err != nil || state != "pending" {
 		t.Fatalf("failed enqueue changed the preview state to %q, %v", state, err)
 	}
+
+}
+
+func testOwnerWebhookEnqueue(t *testing.T, d *Deployer) {
+	const sha = "f2daa6382a9064a8c1086b5f669f113eb84cf719"
+	d.kube = &kubeRuntime{}
+	for _, tc := range []struct {
+		repo, author, command string
+		reopened              bool
+	}{
+		{"solo", "itsaam", "@hatchpr preview " + sha, false},
+		{"shared", "collaborator", "@hatchpr preview " + sha, false},
+		{"reopened", "collaborator", "@hatchpr preview " + sha, true},
+	} {
+		t.Run(tc.repo, func(t *testing.T) {
+			fullName := "itsaam/" + tc.repo
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/" + fullName + "/pulls/42":
+					fmt.Fprintf(w, `{"state":"open","user":{"login":%q},"head":{"sha":%q,"ref":"test","repo":{"full_name":%q}}}`, tc.author, sha, fullName)
+				case "/graphql":
+					events := "[]"
+					if tc.reopened {
+						events = `[{"createdAt":"2026-11-27T00:01:00Z"}]`
+					}
+					fmt.Fprintf(w, `{"data":{"repository":{"pullRequest":{"state":"OPEN","headRefName":"test","headRefOid":%q,"headRepository":{"nameWithOwner":%q},"timelineItems":{"nodes":%s}}}}}`, sha, fullName, events)
+				case "/repos/" + fullName + "/issues/42/comments":
+					w.WriteHeader(http.StatusCreated)
+					io.WriteString(w, `{"id":123}`)
+				default:
+					t.Errorf("unexpected GitHub request to %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			app := newTestAppClient(t)
+			app.baseURL = server.URL
+			app.tokens[123] = cachedToken{token: "test-token", expiresAt: time.Now().Add(time.Hour)}
+			d.SetAppClient(app)
+			secret := []byte("testsecret")
+			h := githubWebhookHandler(d.pool, secret, d, app, parseAllowedOwners("itsaam"), "hatchpr", true)
+			body := fmt.Sprintf(`{
+				"action":"created","installation":{"id":123},"repository":{"full_name":%q},
+				"issue":{"number":42,"pull_request":{},"user":{"login":%q}},
+				"comment":{"id":%d,"body":%q,"created_at":"2026-11-27T00:00:00Z","user":{"login":"itsaam","type":"User"}}
+			}`, fullName, tc.author, 200+len(tc.repo), tc.command)
+			req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", strings.NewReader(body))
+			req.Header.Set(signatureHeader, signBody(secret, []byte(body)))
+			req.Header.Set(eventHeader, "issue_comment")
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			var gotSHA, operation string
+			err := d.pool.QueryRow(ctx, `SELECT p.commit_sha, k.operation FROM previews p
+				JOIN kube_operations k USING (repo_full_name, pr_number)
+				WHERE p.repo_full_name=$1 AND p.pr_number=42`, fullName).Scan(&gotSHA, &operation)
+			if tc.reopened {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					t.Fatalf("older owner command survived reopening: SHA=%q operation=%q err=%v", gotSHA, operation, err)
+				}
+				return
+			}
+			if err != nil || gotSHA != sha || operation != "deploy" {
+				t.Fatalf("queued GitHub command = (%q, %q, %v), want a deploy for %s", gotSHA, operation, err, sha)
+			}
+		})
+	}
+}
+
+func testOwnerCloseOrdering(t *testing.T, d *Deployer) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ref := PreviewRef{Repo: "itsaam/ordering", PR: 42, Branch: "test", SHA: strings.Repeat("f", 40)}
+	closedAt := time.Now().UTC().Truncate(time.Second)
+	before := closedAt.Add(-time.Second)
+	after := closedAt.Add(time.Second)
+	readOpen := func(context.Context, PreviewRef) (*pullState, error) {
+		return fixturePull(ref, "open"), nil
+	}
+	assertCommand := func(id int64, at time.Time, want bool) {
+		t.Helper()
+		got, err := d.queueKubeObservedPullRequest(ctx, ref, kubePullRedeploy, id, true, &at, readOpen)
+		if got != want || err != nil {
+			t.Fatalf("command %d queued=%v, err=%v, want %v", id, got, err, want)
+		}
+	}
+	assertOperation := func(want string) {
+		t.Helper()
+		var got string
+		err := d.pool.QueryRow(ctx, `SELECT operation FROM kube_operations WHERE repo_full_name=$1 AND pr_number=$2`, ref.Repo, ref.PR).Scan(&got)
+		if err != nil || got != want {
+			t.Fatalf("operation=%q, err=%v, want %q", got, err, want)
+		}
+	}
+	d.previewOwnerOnly = true
+	defer func() { d.previewOwnerOnly = false }()
+	postClose := func(at time.Time) {
+		t.Helper()
+		secret := []byte("testsecret")
+		h := githubWebhookHandler(d.pool, secret, d, nil, parseAllowedOwners("itsaam"), "hatchpr", true)
+		body := []byte(fmt.Sprintf(`{"action":"closed","number":42,"repository":{"full_name":%q},
+			"pull_request":{"closed_at":%q,"head":{"sha":%q,"ref":"test","repo":{"full_name":%q}}}}`,
+			ref.Repo, at.Format(time.RFC3339), ref.SHA, ref.Repo))
+		resp := postWebhook(t, h, secret, body)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("close webhook returned %d", resp.StatusCode)
+		}
+	}
+
+	processClose := func() {
+		t.Helper()
+		worked, err := d.processKubeWebhook(ctx, commandlessReader(t), commandlessPolicy(t))
+		if !worked || err != nil {
+			t.Fatalf("process close: worked=%v, err=%v", worked, err)
+		}
+	}
+
+	assertCommand(500, before, true)
+	postClose(closedAt)
+	assertCommand(506, before, false)
+	assertOperation("deploy")
+	processClose()
+	assertOperation("close")
+	assertCommand(501, closedAt, false)
+	assertCommand(502, before, false)
+	assertOperation("close")
+	assertCommand(503, after, true)
+	postClose(closedAt)
+	processClose()
+	assertOperation("deploy")
+
+	// A close delivered for the first time after a newer owner command
+	// fences old requests without replacing that newer preview.
+	assertCommand(504, after.Add(2*time.Second), true)
+	postClose(after.Add(time.Second))
+	processClose()
+	assertOperation("deploy")
+	assertCommand(505, after, false)
 }
 
 func fixturePull(ref PreviewRef, state string) *pullState {

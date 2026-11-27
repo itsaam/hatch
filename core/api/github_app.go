@@ -368,6 +368,80 @@ type pullState struct {
 	} `json:"user"`
 }
 
+func (c *AppClient) ownerPreviewPullState(ctx context.Context, ref PreviewRef, approvedAt time.Time) (*pullState, error) {
+	owner, repo, ok := splitRepo(ref.Repo)
+	if !ok || ref.PR <= 0 || approvedAt.IsZero() {
+		return nil, errStaleOwnerApproval
+	}
+	token, err := c.installationToken(ctx, ref.InstallationID)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]any{
+		"query": `query($owner: String!, $repo: String!, $number: Int!) {
+			repository(owner: $owner, name: $repo) {
+				pullRequest(number: $number) {
+					state headRefName headRefOid headRepository { nameWithOwner }
+					timelineItems(last: 1, itemTypes: [CLOSED_EVENT, REOPENED_EVENT]) {
+						nodes { ... on ClosedEvent { createdAt } ... on ReopenedEvent { createdAt } }
+					}
+				}
+			}
+		}`,
+		"variables": map[string]any{"owner": owner, "repo": repo, "number": ref.PR},
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/graphql", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	c.setCommonHeaders(req)
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("read GitHub PR lifecycle: HTTP %d", res.StatusCode)
+	}
+	var result struct {
+		Errors []json.RawMessage
+		Data   struct {
+			Repository struct {
+				PullRequest *struct {
+					State, HeadRefName, HeadRefOid string
+					HeadRepository                 struct{ NameWithOwner string }
+					TimelineItems                  *struct {
+						Nodes []struct{ CreatedAt time.Time }
+					}
+				}
+			}
+		}
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxGitHubResponseSz)).Decode(&result); err != nil {
+		return nil, err
+	}
+	pr := result.Data.Repository.PullRequest
+	if len(result.Errors) != 0 || pr == nil || pr.TimelineItems == nil || pr.TimelineItems.Nodes == nil {
+		return nil, errors.New("GitHub returned incomplete pull request lifecycle")
+	}
+	if pr.State != "OPEN" || !strings.EqualFold(pr.HeadRepository.NameWithOwner, ref.Repo) || pr.HeadRefOid != ref.SHA {
+		return nil, errStaleOwnerApproval
+	}
+	for _, event := range pr.TimelineItems.Nodes {
+		if event.CreatedAt.IsZero() || !approvedAt.After(event.CreatedAt) {
+			return nil, errStaleOwnerApproval
+		}
+	}
+	state := &pullState{State: "open"}
+	state.Head.SHA, state.Head.Ref, state.Head.Repo.FullName = pr.HeadRefOid, pr.HeadRefName, pr.HeadRepository.NameWithOwner
+	return state, nil
+}
+
 // GetPullRequest returns the canonical state of a PR (state, head sha/ref,
 // author). Used by the issue_comment handler since comment payloads only
 // reference the PR by number.

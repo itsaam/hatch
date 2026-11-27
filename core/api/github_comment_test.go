@@ -110,11 +110,23 @@ func TestParseMention(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, hit := parseMention(c.body, c.bot)
+			got, sha := parseMention(c.body, c.bot)
+			hit := got != verbNone
+			if sha != "" {
+				t.Fatalf("unexpected commit %q", sha)
+			}
 			if hit != c.wantHit || got != c.want {
 				t.Fatalf("parseMention(%q, %q) = (%d, %v), want (%d, %v)",
 					c.body, c.bot, got, hit, c.want, c.wantHit)
 			}
 		})
+	}
+}
+
+func TestParsePinnedPreview(t *testing.T) {
+	const sha = "f2daa6382a9064a8c1086b5f669f113eb84cf719"
+	verb, commit := parseMention("@HATCHPR preview "+sha, "hatchpr")
+	if verb != verbDeploy || commit != sha {
+		t.Fatalf("pinned preview = (%d, %q), want deploy at %s", verb, commit, sha)
 	}
 }
