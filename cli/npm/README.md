@@ -1,6 +1,6 @@
 # @hatchpr/cli
 
-Official npm wrapper for the [Hatch](https://hatchpr.dev) CLI — self-hosted PR preview deployments.
+The npm wrapper for the [Hatch](https://hatchpr.dev) configuration CLI.
 
 The native Go binary is downloaded from GitHub Releases on install, matching your OS/arch.
 
@@ -24,14 +24,16 @@ hatch init --dry-run       # print to stdout, don't write
 hatch init --force         # overwrite an existing .hatch.yml
 ```
 
-See the full docs: https://hatchpr.dev
+Review the generated `.hatch.yml`, then open a PR and comment
+`@hatchpr preview` on its own. See the [configuration reference](https://hatchpr.dev/docs/#config).
 
 ## How it works
 
 On `npm install`, the `postinstall` hook (`install.js`) detects your platform
-(`darwin`/`linux`/`win32`, `x64`/`arm64`), downloads the matching archive from
+(see supported platforms below), downloads the matching archive from
 `https://github.com/itsaam/hatch/releases/download/v<version>/…`, verifies the
-SHA-256 checksum, and extracts the `hatch` binary into `bin/`.
+SHA-256 checksum, and extracts the native binary into `vendor/`. The executable in `bin/` forwards
+commands to that binary.
 
 No runtime dependencies.
 

@@ -3,7 +3,7 @@
  * Postinstall script for @hatchpr/cli.
  *
  * Downloads the matching hatch binary from GitHub Releases, verifies its
- * SHA-256 checksum, extracts it, and places it at bin/hatch (or bin/hatch.exe).
+ * SHA-256 checksum, extracts it, and places it at vendor/hatch (or vendor/hatch.exe).
  *
  * Zero runtime dependencies — uses only Node.js built-ins + the system `tar`.
  */

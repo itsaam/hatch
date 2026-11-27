@@ -24,9 +24,10 @@ type FS interface {
 // Service is the internal representation before YAML emission.
 type Service struct {
 	Name        string
-	Build       string            // "." or subfolder
-	Image       string            // OR image
-	Port        int               // 0 = none
+	Build       string // "." or subfolder
+	Dockerfile  string // optional file relative to the build context
+	Image       string // OR image
+	Port        int    // 0 = none
 	Expose      bool
 	Env         map[string]string // values as-is (may contain ${SECRET_X})
 	DependsOn   []string
@@ -108,7 +109,6 @@ func detectInner(fs FS) (*DetectResult, error) {
 				{
 					Name:   "web",
 					Build:  ".",
-					Port:   3000,
 					Expose: true,
 					Env:    map[string]string{},
 				},
@@ -145,13 +145,14 @@ type composeFile struct {
 }
 
 type composeService struct {
-	Build       interface{}   `yaml:"build"`
-	Image       string        `yaml:"image"`
-	Ports       []string      `yaml:"ports"`
-	Environment interface{}   `yaml:"environment"` // map or list
-	DependsOn   interface{}   `yaml:"depends_on"`  // list or map
-	Healthcheck *composeHC    `yaml:"healthcheck"`
-	Expose      []interface{} `yaml:"expose"`
+	Build       interface{} `yaml:"build"`
+	Image       string      `yaml:"image"`
+	Ports       []string    `yaml:"ports"`
+	Environment interface{} `yaml:"environment"` // map or list
+	DependsOn   interface{} `yaml:"depends_on"`  // list or map
+	Healthcheck *composeHC  `yaml:"healthcheck"`
+	Command     interface{} `yaml:"command"`
+	Entrypoint  interface{} `yaml:"entrypoint"`
 }
 
 type composeHC struct {
@@ -159,6 +160,8 @@ type composeHC struct {
 	Interval string      `yaml:"interval"`
 	Retries  int         `yaml:"retries"`
 }
+
+var previewServiceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}[a-z0-9]$|^[a-z]$`)
 
 func detectFromCompose(fs FS, path string) (*DetectResult, error) {
 	raw, err := fs.ReadFile(path)
@@ -170,8 +173,14 @@ func detectFromCompose(fs FS, path string) (*DetectResult, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
+	if len(cf.Services) == 0 {
+		return nil, fmt.Errorf("%s has no services", path)
+	}
 	names := make([]string, 0, len(cf.Services))
 	for n := range cf.Services {
+		if !previewServiceName.MatchString(n) {
+			return nil, fmt.Errorf("%s service %q is not a valid Hatch service name (use a lowercase DNS label of up to 32 characters starting with a letter)", path, n)
+		}
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -195,6 +204,7 @@ func detectFromCompose(fs FS, path string) (*DetectResult, error) {
 	}
 
 	services := make([]Service, 0, len(names))
+	var warnings []string
 	for i, n := range names {
 		cs := cf.Services[n]
 		svc := Service{Name: n, Env: map[string]string{}}
@@ -203,6 +213,7 @@ func detectFromCompose(fs FS, path string) (*DetectResult, error) {
 		case string:
 			svc.Build = b
 		case map[string]interface{}:
+			svc.Dockerfile, _ = b["dockerfile"].(string)
 			if ctx, ok := b["context"].(string); ok {
 				svc.Build = ctx
 			} else {
@@ -213,8 +224,11 @@ func detectFromCompose(fs FS, path string) (*DetectResult, error) {
 				svc.Image = cs.Image
 			}
 		}
-		if svc.Build == "" && svc.Image == "" && cs.Build != nil {
-			svc.Build = "."
+		if svc.Build == "" && svc.Image == "" {
+			return nil, fmt.Errorf("%s service %q must declare a build or image", path, n)
+		}
+		if cs.Command != nil || cs.Entrypoint != nil {
+			warnings = append(warnings, fmt.Sprintf("Service %s overrides its startup command in Compose. Set that command in its Dockerfile or image for Hatch.", n))
 		}
 
 		if len(cs.Ports) > 0 {
@@ -250,6 +264,7 @@ func detectFromCompose(fs FS, path string) (*DetectResult, error) {
 	return &DetectResult{
 		StackName: fmt.Sprintf("docker-compose (%d services)", len(services)),
 		Services:  services,
+		Warnings:  warnings,
 	}, nil
 }
 
@@ -423,7 +438,7 @@ func detectFromPackageJSON(fs FS) (*DetectResult, error) {
 // detectedNodeDeps returns a stable, deduped list of notable deps we recognized.
 func detectedNodeDeps(has func(string) bool) []string {
 	buckets := []struct {
-		label string
+		label  string
 		probes []string
 	}{
 		{"prisma", []string{"prisma", "@prisma/client"}},
@@ -554,7 +569,9 @@ func nodeFrameworkLabel(has func(string) bool) string {
 }
 
 func nodeAPIStack(has func(string) bool, warnings []string) *DetectResult {
-	withDB := has("pg") || has("mongoose") || has("prisma") || has("@prisma/client") || has("drizzle-orm") || has("mysql2") || has("mongodb")
+	otherDB := has("mongoose") || has("mongodb") || has("mysql2")
+	withORM := has("prisma") || has("@prisma/client") || has("drizzle-orm")
+	withDB := has("pg") || (withORM && !otherDB)
 	withRedis := hasRedisDep(has)
 	api := Service{
 		Name:   "api",
@@ -571,6 +588,9 @@ func nodeAPIStack(has func(string) bool, warnings []string) *DetectResult {
 		api.Env["DATABASE_URL"] = "postgresql://app:${DB_PASSWORD}@db:5432/app?schema=public"
 		deps = append(deps, "db")
 		services = append(services, postgresService())
+	}
+	if otherDB {
+		warnings = append(warnings, "Review database dependencies. Add any MongoDB or MySQL services and their connection settings manually.")
 	}
 	if withRedis {
 		name += " + Redis"
@@ -662,7 +682,7 @@ func detectFromGemfile(fs FS) (*DetectResult, error) {
 		Port:   3000,
 		Expose: true,
 		Env: map[string]string{
-			"RAILS_ENV":      "production",
+			"RAILS_ENV":           "production",
 			"RAILS_LOG_TO_STDOUT": "1",
 		},
 	}
@@ -693,7 +713,12 @@ func detectFromGemfile(fs FS) (*DetectResult, error) {
 			DependsOn: deps,
 			// no port/expose for workers
 		}
-		worker.Env["PROCESS_TYPE"] = "worker"
+		if fs.Exists("Dockerfile.worker") {
+			worker.Dockerfile = "Dockerfile.worker"
+		} else {
+			worker.Env["PROCESS_TYPE"] = "worker"
+			warnings = append(warnings, "Ensure the Dockerfile starts Sidekiq when PROCESS_TYPE=worker, or add a Dockerfile.worker.")
+		}
 		services = append(services, worker)
 		name += " + Sidekiq"
 	}

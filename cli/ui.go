@@ -28,7 +28,6 @@ type UI struct {
 	errS    lipgloss.Style
 	header  lipgloss.Style
 	box     lipgloss.Style
-	dryRun  lipgloss.Style
 }
 
 // NewUI builds a UI based on the current process state.
@@ -67,7 +66,6 @@ func NewUI(out io.Writer, noAnimation bool) *UI {
 		u.errS = r.NewStyle()
 		u.header = r.NewStyle()
 		u.box = r.NewStyle()
-		u.dryRun = r.NewStyle()
 		return u
 	}
 
@@ -86,10 +84,6 @@ func NewUI(out io.Writer, noAnimation bool) *UI {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(accentColor).
 		Padding(1, 2)
-	u.dryRun = lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(mutedColor).
-		Padding(0, 1)
 	return u
 }
 
@@ -203,42 +197,6 @@ func (u *UI) SummaryBox(title string, lines []string) {
 	}
 	fmt.Fprintln(u.Out)
 	fmt.Fprintln(u.Out, u.box.Render(strings.TrimRight(sb.String(), "\n")))
-}
-
-// DryRunBlock prints the yaml content inside a bordered block.
-func (u *UI) DryRunBlock(yaml string) {
-	if !u.Interactive {
-		fmt.Fprintln(u.Out)
-		fmt.Fprintln(u.Out, "--- .hatch.yml (dry-run) ---")
-		fmt.Fprint(u.Out, yaml)
-		return
-	}
-	fmt.Fprintln(u.Out)
-	fmt.Fprintln(u.Out, u.muted.Render("Dry run — no file written"))
-	fmt.Fprintln(u.Out, u.muted.Render(strings.Repeat("─", 60)))
-	// Plain YAML output — pas de box, juste une règle pour séparer.
-	// Keys colorées accent, valeurs neutres, commentaires mutés.
-	for _, line := range strings.Split(strings.TrimRight(yaml, "\n"), "\n") {
-		fmt.Fprintln(u.Out, u.colorizeYAMLLine(line))
-	}
-	fmt.Fprintln(u.Out, u.muted.Render(strings.Repeat("─", 60)))
-}
-
-// colorizeYAMLLine applies a light syntax highlighting :
-// commentaires en muted, keys en accent, strings en normal.
-func (u *UI) colorizeYAMLLine(line string) string {
-	trimmed := strings.TrimLeft(line, " ")
-	indent := line[:len(line)-len(trimmed)]
-	if strings.HasPrefix(trimmed, "#") {
-		return indent + u.muted.Render(trimmed)
-	}
-	// key: value pattern — colore juste la key
-	if idx := strings.Index(trimmed, ":"); idx > 0 && !strings.HasPrefix(trimmed, "-") {
-		key := trimmed[:idx]
-		rest := trimmed[idx:]
-		return indent + u.accent.Render(key) + rest
-	}
-	return line
 }
 
 // Accent returns an accent-styled string for inline composition.

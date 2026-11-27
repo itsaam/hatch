@@ -73,6 +73,14 @@ else
   die "Neither curl nor wget found. Install one and retry."
 fi
 
+if command -v sha256sum >/dev/null 2>&1; then
+  CHECKSUM_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  CHECKSUM_CMD="shasum"
+else
+  die "Install sha256sum or shasum to verify the release archive."
+fi
+
 fetch_to_stdout() {
   # $1 = URL
   if [ "$DL_CMD" = "curl" ]; then
@@ -153,13 +161,10 @@ step "  Verifying" "checksum..."
 EXPECTED="$(grep " ${ARCHIVE_NAME}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}' | head -n1)"
 [ -n "$EXPECTED" ] || die "No checksum entry found for $ARCHIVE_NAME"
 
-if command -v sha256sum >/dev/null 2>&1; then
+if [ "$CHECKSUM_CMD" = "sha256sum" ]; then
   ACTUAL="$(sha256sum "${TMP_DIR}/${ARCHIVE_NAME}" | awk '{print $1}')"
-elif command -v shasum >/dev/null 2>&1; then
-  ACTUAL="$(shasum -a 256 "${TMP_DIR}/${ARCHIVE_NAME}" | awk '{print $1}')"
 else
-  warn "  Warning: neither sha256sum nor shasum available — skipping checksum verification."
-  ACTUAL="$EXPECTED"
+  ACTUAL="$(shasum -a 256 "${TMP_DIR}/${ARCHIVE_NAME}" | awk '{print $1}')"
 fi
 
 if [ "$ACTUAL" != "$EXPECTED" ]; then

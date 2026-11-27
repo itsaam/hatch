@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // memFS is an in-memory FS implementation for tests.
@@ -286,6 +288,71 @@ func TestGenerateRoundTrip(t *testing.T) {
 		if !strings.Contains(out, needle) {
 			t.Errorf("output missing %q\n---\n%s", needle, out)
 		}
+	}
+}
+
+func TestGeneratePreservesComposeDockerfileAndEnv(t *testing.T) {
+	r, err := Detect(newMemFS(map[string]string{
+		"compose.yaml": `services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.preview
+    ports: ["8080:80"]
+    command: ["serve"]
+    environment:
+      PATTERN: "[one,two]"
+      FRACTION: "0.125"
+      LEADING_SPACE: " value"
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "startup command") {
+		t.Fatalf("warnings = %v, want Compose startup command warning", r.Warnings)
+	}
+	var config struct {
+		Services map[string]struct {
+			Dockerfile string
+			Port       int
+			Env        map[string]any
+		}
+	}
+	if err := yaml.Unmarshal([]byte(Generate(r)), &config); err != nil {
+		t.Fatal(err)
+	}
+	web := config.Services["web"]
+	if web.Dockerfile != "Dockerfile.preview" || web.Port != 80 {
+		t.Fatalf("generated service = %+v", web)
+	}
+	for key, want := range map[string]string{"PATTERN": "[one,two]", "FRACTION": "0.125", "LEADING_SPACE": " value"} {
+		if got, ok := web.Env[key].(string); !ok || got != want {
+			t.Errorf("env[%q] = %#v, want string %q", key, web.Env[key], want)
+		}
+	}
+}
+
+func TestDetectDockerfileOnlyLetsRuntimeInferPort(t *testing.T) {
+	r, err := Detect(newMemFS(map[string]string{"Dockerfile": "FROM nginx:alpine\nEXPOSE 80\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Services[0].Port != 0 || !r.Services[0].Expose {
+		t.Fatalf("Dockerfile-only service = %+v", r.Services[0])
+	}
+}
+
+func TestDetectNodeDoesNotSubstitutePostgresForMongo(t *testing.T) {
+	r, err := Detect(newMemFS(map[string]string{
+		"package.json": `{"dependencies":{"express":"4","mongoose":"8"}}`,
+		"Dockerfile":   "FROM node:20\n",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Services) != 1 || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "MongoDB") {
+		t.Fatalf("unexpected detected stack: %+v", r)
 	}
 }
 

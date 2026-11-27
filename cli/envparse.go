@@ -10,7 +10,7 @@ import (
 type EnvEntry struct {
 	Key     string
 	Value   string // rewritten value for preview
-	Comment string // optional comment line to emit after the entry (e.g. provide via hatch secrets)
+	Comment string // optional comment line to emit after the entry
 }
 
 // envURLKeys matches variable names that refer to the public URL of the app —
