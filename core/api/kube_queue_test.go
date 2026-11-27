@@ -328,7 +328,7 @@ func TestKubeQueuePostgreSQL(t *testing.T) {
 	testOwnerWebhookEnqueue(t, d)
 	testOwnerCloseOrdering(t, d)
 
-	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (operation <> 'close')`)
+	mustExec(pool, `ALTER TABLE kube_operations ADD CHECK (repo_full_name <> 'acme/app' OR operation <> 'close')`)
 	if _, err := d.queueKubePullRequest(ctx, newHead, kubePullClosed, 0, reader(fixturePull(newHead, "closed"))); err == nil {
 		t.Fatal("expected the queue write to fail")
 	}
@@ -351,11 +351,22 @@ func testOwnerWebhookEnqueue(t *testing.T, d *Deployer) {
 	} {
 		t.Run(tc.repo, func(t *testing.T) {
 			fullName := "itsaam/" + tc.repo
+			closeDuringRead := make(chan time.Time, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/repos/" + fullName + "/pulls/42":
 					fmt.Fprintf(w, `{"state":"open","user":{"login":%q},"head":{"sha":%q,"ref":"test","repo":{"full_name":%q}}}`, tc.author, sha, fullName)
 				case "/graphql":
+					select {
+					case closedAt := <-closeDuringRead:
+						ref := PreviewRef{Repo: fullName, PR: 42, SHA: sha, InstallationID: 123}
+						if err := d.storeKubeWebhook(r.Context(), ref, kubePullClosed, closedAt); err != nil {
+							t.Error(err)
+							w.WriteHeader(http.StatusInternalServerError)
+							return
+						}
+					default:
+					}
 					events := "[]"
 					if tc.reopened {
 						events = `[{"createdAt":"2026-11-27T00:01:00Z"}]`
@@ -393,9 +404,10 @@ func testOwnerWebhookEnqueue(t *testing.T, d *Deployer) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			var gotSHA, operation string
-			err := d.pool.QueryRow(ctx, `SELECT p.commit_sha, k.operation FROM previews p
+			var operationID int64
+			err := d.pool.QueryRow(ctx, `SELECT p.commit_sha, k.operation, k.id FROM previews p
 				JOIN kube_operations k USING (repo_full_name, pr_number)
-				WHERE p.repo_full_name=$1 AND p.pr_number=42`, fullName).Scan(&gotSHA, &operation)
+				WHERE p.repo_full_name=$1 AND p.pr_number=42`, fullName).Scan(&gotSHA, &operation, &operationID)
 			if tc.reopened {
 				if !errors.Is(err, pgx.ErrNoRows) {
 					t.Fatalf("older owner command survived reopening: SHA=%q operation=%q err=%v", gotSHA, operation, err)
@@ -404,6 +416,26 @@ func testOwnerWebhookEnqueue(t *testing.T, d *Deployer) {
 			}
 			if err != nil || gotSHA != sha || operation != "deploy" {
 				t.Fatalf("queued GitHub command = (%q, %q, %v), want a deploy for %s", gotSHA, operation, err, sha)
+			}
+			if tc.repo != "solo" {
+				return
+			}
+			ref := PreviewRef{Repo: fullName, PR: 42, SHA: sha, InstallationID: 123}
+			job := kubeOperation{id: operationID, ref: ref}
+			if _, err := d.ownerPreviewJobPullState(ctx, job); err != nil {
+				t.Fatalf("valid worker approval was rejected: %v", err)
+			}
+			closeDuringRead <- time.Date(2026, 11, 27, 0, 0, 1, 0, time.UTC)
+			if _, err := d.ownerPreviewJobPullState(ctx, job); !errors.Is(err, errStaleOwnerApproval) {
+				t.Fatalf("worker ignored a close received during the GitHub read: %v", err)
+			}
+			if _, err := d.ownerPreviewJobPullState(ctx, job); !errors.Is(err, errStaleOwnerApproval) {
+				t.Fatalf("worker ignored an acknowledged close: %v", err)
+			}
+			d.previewOwnerOnly = true
+			defer func() { d.previewOwnerOnly = false }()
+			if worked, err := d.processKubeWebhook(ctx, commandlessReader(t), commandlessPolicy(t)); !worked || err != nil {
+				t.Fatalf("process close: worked=%v, err=%v", worked, err)
 			}
 		})
 	}

@@ -293,20 +293,38 @@ func (d *Deployer) publishCurrentKubeOperation(ctx context.Context, job kubeOper
 }
 
 func (d *Deployer) ownerPreviewJobPullState(ctx context.Context, job kubeOperation) (*pullState, error) {
-	var approvedAt *time.Time
-	err := d.pool.QueryRow(ctx, `SELECT s.owner_approved_at FROM kube_operations op
-		LEFT JOIN kube_pull_request_events s USING (repo_full_name, pr_number)
-		WHERE op.id=$1 AND s.head_sha=$2`, job.id, job.ref.SHA).Scan(&approvedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if d.app == nil || job.ref.InstallationID == 0 {
 		return nil, errStaleOwnerApproval
 	}
+	approvedAt, err := d.ownerPreviewJobApproval(ctx, job)
 	if err != nil {
 		return nil, err
 	}
-	if approvedAt == nil || d.app == nil || job.ref.InstallationID == 0 {
-		return nil, errStaleOwnerApproval
+	state, err := d.app.ownerPreviewPullState(ctx, job.ref, approvedAt)
+	if err != nil {
+		return nil, err
 	}
-	return d.app.ownerPreviewPullState(ctx, job.ref, *approvedAt)
+	// A signed close can arrive while GitHub's view still says open.
+	_, err = d.ownerPreviewJobApproval(ctx, job)
+	return state, err
+}
+
+func (d *Deployer) ownerPreviewJobApproval(ctx context.Context, job kubeOperation) (time.Time, error) {
+	var approvedAt time.Time
+	err := d.pool.QueryRow(ctx, `SELECT s.owner_approved_at FROM kube_operations op
+		JOIN kube_pull_request_events s USING (repo_full_name, pr_number)
+		WHERE op.id=$1 AND s.head_sha=$2 AND s.owner_approved_at IS NOT NULL
+		AND (s.last_closed_at IS NULL OR s.last_closed_at < s.owner_approved_at)
+		AND NOT EXISTS (
+			SELECT 1 FROM kube_github_deliveries delivery
+			WHERE lower(delivery.repo_full_name)=lower(op.repo_full_name)
+			  AND delivery.pr_number=op.pr_number AND delivery.closed
+			  AND delivery.source_updated_at >= s.owner_approved_at
+		)`, job.id, job.ref.SHA).Scan(&approvedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = errStaleOwnerApproval
+	}
+	return approvedAt, err
 }
 
 func (d *Deployer) checkKubePublication(ctx context.Context, job kubeOperation) error {
