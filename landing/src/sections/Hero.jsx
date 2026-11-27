@@ -37,7 +37,7 @@ export default function Hero({ ready }) {
     return () => ctx.revert()
   }, [ready])
 
-  const words = ['Chaque', 'PR', 'éclot', 'en', 'preview', 'live,']
+  const words = ['PR', 'previews', 'for', 'your']
   return (
     <section ref={sectionRef} style={{
       minHeight: '100vh', display: 'flex', flexDirection: 'column',
@@ -60,7 +60,7 @@ export default function Hero({ ready }) {
             </span>
           ))}
           <span className="w" style={{ display: 'inline-block', overflow: 'hidden', paddingBottom: '0.12em', marginBottom: '-0.12em' }}>
-            <span className="italic-accent" style={{ display: 'inline-block', willChange: 'transform', fontSize: 'clamp(48px, 9vw, 128px)' }}>instantanément.</span>
+            <span className="italic-accent" style={{ display: 'inline-block', willChange: 'transform', fontSize: 'clamp(48px, 9vw, 128px)' }}>stack.</span>
           </span>
         </h1>
 
@@ -69,8 +69,7 @@ export default function Hero({ ready }) {
           color: 'var(--text-mute)', maxWidth: 620, marginInline: 'auto',
           lineHeight: 1.5
         }}>
-          L'outil open-source de PR preview environments.<br />
-          Sur ton infra. Sans Vercel. Sans Coolify.
+          Run your app, database and services together on your own infrastructure.
         </p>
 
         <div className="hero-form" style={{ marginTop: 40, display: 'grid', placeItems: 'center' }}>
@@ -80,7 +79,7 @@ export default function Hero({ ready }) {
         <p className="hero-meta mono" style={{
           marginTop: 18, color: 'var(--text-faint)'
         }}>
-          ≈ {count ?? '—'} {count === 1 ? 'dev déjà inscrit' : 'devs déjà inscrits'}
+          ≈ {count ?? '—'} {count === 1 ? 'developer signed up' : 'developers signed up'}
         </p>
 
         <div className="hero-tags" style={{
@@ -88,12 +87,12 @@ export default function Hero({ ready }) {
         }}>
           <Tag>FREE & OPEN SOURCE</Tag>
           <span className="mono" style={{ color: 'var(--text-faint)' }}>·</span>
-          <Tag>BIENTÔT EN BETA</Tag>
+          <Tag>IN DEVELOPMENT</Tag>
         </div>
       </div>
 
       <div style={{ marginTop: 'auto', paddingTop: 80 }}>
-        <Marquee items={['DOCKER', 'GITHUB WEBHOOKS', 'TRAEFIK', 'SELF-HOSTED', 'OPEN SOURCE', 'PREVIEW DEPLOYMENTS', 'ZERO CONFIG']} />
+        <Marquee items={['DOCKER', 'GITHUB WEBHOOKS', 'TRAEFIK', 'SELF-HOSTED', 'OPEN SOURCE', 'PREVIEW DEPLOYMENTS', 'DOCKER COMPOSE']} />
       </div>
     </section>
   )

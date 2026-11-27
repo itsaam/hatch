@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hatch-public
+  namespace: hatch-system
+spec:
+  tls:
+    - hosts:
+        - api.hatch.example.org
+        - hatch.example.org
+      secretName: hatch-public-tls
+  rules:
+    - host: api.hatch.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hatch-api
+                port:
+                  name: http
+    - host: hatch.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hatch-landing
+                port:
+                  name: http

@@ -1,4 +1,4 @@
-export default function StatusPill({ children = 'EN DÉVELOPPEMENT' }) {
+export default function StatusPill({ children = 'IN DEVELOPMENT' }) {
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 8,

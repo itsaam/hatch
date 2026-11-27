@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -10,7 +11,7 @@ import (
 type EnvEntry struct {
 	Key     string
 	Value   string // rewritten value for preview
-	Comment string // optional comment line to emit after the entry (e.g. provide via hatch secrets)
+	Comment string // optional comment line to emit after the entry
 }
 
 // envURLKeys matches variable names that refer to the public URL of the app —
@@ -32,7 +33,11 @@ var envStableSecretKeys = map[string]bool{
 var envBoolPattern = regexp.MustCompile(`^(?i)(true|false)$`)
 
 // envPGURLPattern matches a postgres URL so we can rewrite host/password.
-var envPGURL = regexp.MustCompile(`^postgres(?:ql)?://`)
+var envPGURL = regexp.MustCompile(`(?i)^postgres(?:ql)?://`)
+var envOtherDBURL = regexp.MustCompile(`(?i)^(?:mysql|mongodb(?:\+srv)?)://`)
+var previewVariable = regexp.MustCompile(`^\$\{[A-Z_][A-Z0-9_]*\}$`)
+
+const previewPostgresURL = "postgresql://app:${DB_PASSWORD}@db:5432/app?schema=public"
 
 // envRedisURL detects a redis URL.
 var envRedisURL = regexp.MustCompile(`^redis://`)
@@ -80,10 +85,16 @@ func stripQuotes(v string) string {
 // classifyEnv turns a raw (KEY, VAL) pair into a preview-ready entry.
 func classifyEnv(key, val string) EnvEntry {
 	upper := strings.ToUpper(key)
+	databaseURL := strings.TrimSpace(val)
 
-	// DATABASE_URL → normalize to internal postgres
-	if upper == "DATABASE_URL" || envPGURL.MatchString(val) {
-		return EnvEntry{Key: key, Value: "postgresql://app:${DB_PASSWORD}@db:5432/app?schema=public"}
+	if envPGURL.MatchString(databaseURL) || (upper == "DATABASE_URL" && databaseURL == "") {
+		return EnvEntry{Key: key, Value: previewPostgresURL}
+	}
+	if upper == "DATABASE_URL" && isLocalDatabaseURL(databaseURL) {
+		return EnvEntry{Key: key, Value: val}
+	}
+	if upper == "DATABASE_URL" || envOtherDBURL.MatchString(databaseURL) {
+		return databaseSecretEntry(key)
 	}
 
 	// REDIS_URL → internal redis
@@ -132,6 +143,19 @@ func classifyEnv(key, val string) EnvEntry {
 	}
 
 	return EnvEntry{Key: key, Value: val}
+}
+
+func isLocalDatabaseURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && strings.EqualFold(parsed.Scheme, "file") && parsed.User == nil &&
+		(parsed.Host == "" || strings.EqualFold(parsed.Host, "localhost"))
+}
+
+func databaseSecretEntry(key string) EnvEntry {
+	return EnvEntry{
+		Key: key, Value: "${SECRET_" + strings.ToUpper(key) + "}",
+		Comment: "# Set this test database URL in the Hatch dashboard.",
+	}
 }
 
 func looksLikeNotification(upper string) bool {

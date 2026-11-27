@@ -12,27 +12,27 @@ const templates = [
   {
     name: 'nextjs-postgres',
     stack: 'Next.js 15 · Postgres 16',
-    desc: 'App Router en standalone + DB isolée par PR. Idéal pour previewer une feature full-stack.'
+    desc: 'A standalone App Router build with a PostgreSQL database for each preview.'
   },
   {
     name: 'fastapi-postgres',
     stack: 'FastAPI · Postgres 16',
-    desc: 'API Python async avec migrations et seed automatique au démarrage du preview.'
+    desc: 'A Python API with PostgreSQL and a preview seed.'
   },
   {
     name: 'django-redis',
     stack: 'Django 5 · Redis 7',
-    desc: 'Backend Django classique avec cache et sessions Redis. Healthcheck inclus.'
+    desc: 'A Django app with a Redis dependency.'
   },
   {
     name: 'rails-sidekiq',
     stack: 'Rails 7 · Sidekiq · Redis',
-    desc: 'API Rails avec workers Sidekiq pour les jobs en background, prêt à brancher.'
+    desc: 'A Rails app with Sidekiq for background jobs.'
   },
   {
     name: 'static',
     stack: 'nginx alpine',
-    desc: 'Site statique servi par nginx. Le plus rapide à booter, parfait pour des previews docs.'
+    desc: 'A static site served by Nginx.'
   }
 ]
 
@@ -56,21 +56,20 @@ export default function Templates() {
   }, [])
 
   return (
-    <Section id="templates" label="[03] LES TEMPLATES">
+    <Section id="templates" label="[03] TEMPLATES">
       <RevealText as="h2" className="display" style={{
         fontSize: 'clamp(32px, 5vw, 64px)', maxWidth: 900, marginBottom: 24, fontWeight: 700
       }}>
-        Démarre en 30 secondes. <span className="italic-accent" style={{ fontSize: 'inherit' }}>Fork, push, preview.</span>
+        Start from a <span className="italic-accent" style={{ fontSize: 'inherit' }}>template.</span>
       </RevealText>
 
       <p style={{
         color: 'var(--text-mute)', fontSize: 17, maxWidth: 640, marginBottom: 64, lineHeight: 1.6
       }}>
-        Cinq templates prêts à l'emploi pour les stacks les plus courantes. Chaque
-        repo contient un <code style={{
+        Each template includes a <code style={{
           fontFamily: 'var(--font-mono)', color: 'var(--accent)',
           background: 'rgba(255,122,61,0.08)', padding: '2px 6px', borderRadius: 4, fontSize: 14
-        }}>.hatch.yml</code> et un Dockerfile multi-stage optimisé.
+        }}>.hatch.yml</code> and a Dockerfile. Use a repository allowed by your Hatch instance.
       </p>
 
       <div ref={ref} className="tpl-grid" style={{
@@ -162,7 +161,7 @@ function TemplateCard({ t }) {
         color: 'var(--text)',
         transition: 'color 200ms ease'
       }}>
-        Utiliser ce template
+        View template
         <span className="tpl-cta-arrow" style={{
           transition: 'transform 200ms ease',
           display: 'inline-block'

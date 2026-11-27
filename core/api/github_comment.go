@@ -25,9 +25,10 @@ type issueCommentEvent struct {
 		} `json:"user"`
 	} `json:"issue"`
 	Comment struct {
-		ID   int64  `json:"id"`
-		Body string `json:"body"`
-		User struct {
+		ID        int64     `json:"id"`
+		Body      string    `json:"body"`
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
 			Login string `json:"login"`
 			Type  string `json:"type"` // "Bot" / "User"
 		} `json:"user"`
@@ -60,7 +61,7 @@ const (
 // handleIssueCommentEvent handles the `issue_comment` webhook event. It
 // reuses the same authorization gates as the `pull_request` handler (owner
 // allowlist + bot/Bot guard) and routes the parsed verb to the deployer.
-func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte, pool *pgxpool.Pool, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string) {
+func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte, pool *pgxpool.Pool, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string, ownerCommandOnly bool) {
 	var ev issueCommentEvent
 	if err := json.Unmarshal(body, &ev); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -91,9 +92,14 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	}
 
-	verb, mentioned := parseMention(ev.Comment.Body, botHandle)
-	if !mentioned {
+	verb, requestedSHA := parseMention(ev.Comment.Body, botHandle)
+	if verb == verbNone {
 		writeOK(w)
+		return
+	}
+	if ownerCommandOnly && !strings.EqualFold(ev.Comment.User.Login, owner) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"ok":true,"skipped":"owner command required"}`))
 		return
 	}
 
@@ -126,16 +132,41 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	}
 
-	authorized, err := commenterAuthorized(ctx, app, ev.Installation.ID, owner, repo, ev.Comment.User.Login, pr.User.Login)
-	if err != nil {
-		log.Printf("issue_comment: authz %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
+	if !ownerCommandOnly {
+		authorized, err := commenterAuthorized(ctx, app, ev.Installation.ID, owner, repo, ev.Comment.User.Login, pr.User.Login)
+		if err != nil {
+			log.Printf("issue_comment: authz %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
+		if !authorized {
+			_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionUnauthz)
+			writeOK(w)
+			return
+		}
 	}
-	if !authorized {
-		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionUnauthz)
-		writeOK(w)
-		return
+
+	if verb == verbDeploy && pr.State == "open" {
+		if requestedSHA != "" {
+			if !strings.EqualFold(requestedSHA, pr.Head.SHA) {
+				_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number,
+					"That commit is no longer the head of this PR. Request a new preview for the current commit.")
+				writeOK(w)
+				return
+			}
+		} else if ownerCommandOnly {
+			if !buildCommitPattern.MatchString(pr.Head.SHA) {
+				http.Error(w, "invalid pull request head", http.StatusBadGateway)
+				return
+			}
+			reply := fmt.Sprintf("Review the commit and confirm with `@%s preview %s`.", strings.TrimPrefix(botHandle, "@"), pr.Head.SHA)
+			if _, err := app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, reply); err != nil {
+				http.Error(w, "internal", http.StatusInternalServerError)
+				return
+			}
+			writeOK(w)
+			return
+		}
 	}
 
 	ref := PreviewRef{
@@ -155,7 +186,37 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		}
 		// Track the preview as pending and (re)post the sticky comment so the
 		// deployer's notifier has a comment id to update.
-		if err := upsertPendingPreview(ctx, pool, ref); err != nil {
+		var err error
+		if deployer.kube != nil {
+			var approvedAt *time.Time
+			read := deployer.githubPullState
+			if ownerCommandOnly {
+				if ev.Comment.CreatedAt.IsZero() || ev.Comment.ID <= 0 {
+					http.Error(w, "missing comment identity or creation time", http.StatusBadRequest)
+					return
+				}
+				approvedAt = &ev.Comment.CreatedAt
+				read = func(ctx context.Context, ref PreviewRef) (*pullState, error) {
+					return app.ownerPreviewPullState(ctx, ref, *approvedAt)
+				}
+			}
+			var queued bool
+			queued, err = deployer.queueKubeObservedPullRequest(ctx, ref, kubePullRedeploy, ev.Comment.ID,
+				requestedSHA != "", approvedAt, read)
+			if errors.Is(err, errStaleOwnerApproval) {
+				_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number,
+					"The PR changed after this command was created. Confirm the current commit again after reopening.")
+				writeOK(w)
+				return
+			}
+			if err == nil && !queued {
+				writeOK(w)
+				return
+			}
+		} else {
+			_, err = pool.Exec(ctx, upsertPendingPreviewSQL, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID))
+		}
+		if err != nil {
 			log.Printf("issue_comment: upsert %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
@@ -163,6 +224,10 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		// Acknowledge so the user sees feedback immediately, then ensure the
 		// sticky comment exists so OnStatusChange has something to update.
 		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
+		if deployer.kube != nil {
+			writeOK(w)
+			return
+		}
 		if err := ensureMentionStickyComment(ctx, pool, app, ev.Installation.ID, owner, repo, ev.Issue.Number, pr.Head.SHA); err != nil {
 			log.Printf("issue_comment: sticky comment %s#%d: %v", ev.Repository.FullName, ev.Issue.Number, err)
 		}
@@ -173,17 +238,30 @@ func handleIssueCommentEvent(w http.ResponseWriter, r *http.Request, body []byte
 		}
 
 	case verbDestroy:
+		if deployer.kube != nil {
+			queued, err := deployer.queueKubeStopCommand(ctx, ref, ev.Comment.ID)
+			if err != nil {
+				log.Printf("issue_comment: queue stop %s#%d: %v", ref.Repo, ref.PR, err)
+				http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if queued {
+				_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
+			}
+			writeOK(w)
+			return
+		}
 		if !previewExists(ctx, pool, ref.Repo, ref.PR) {
 			// Nothing to destroy — silent OK.
 			writeOK(w)
 			return
 		}
 		ref.CommentID = loadCommentID(ctx, pool, ref.Repo, ref.PR)
-		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
 		if !deployer.DestroyAsync(ref) {
 			http.Error(w, "destroy queue full", http.StatusServiceUnavailable)
 			return
 		}
+		_, _ = app.CommentPR(ctx, ev.Installation.ID, owner, repo, ev.Issue.Number, commentMentionAck)
 	}
 	writeOK(w)
 }
@@ -200,10 +278,7 @@ func commenterAuthorized(ctx context.Context, app *AppClient, installID int64, o
 	return app.IsCollaborator(ctx, installID, owner, repo, commenter)
 }
 
-// upsertPendingPreview is the equivalent of handlePullRequest's INSERT used
-// by the issue_comment path, where we don't have a prEvent payload.
-func upsertPendingPreview(ctx context.Context, pool *pgxpool.Pool, ref PreviewRef) error {
-	_, err := pool.Exec(ctx, `
+const upsertPendingPreviewSQL = `
 		INSERT INTO previews (repo_full_name, pr_number, branch, commit_sha, status, installation_id)
 		VALUES ($1, $2, $3, $4, 'pending', $5)
 		ON CONFLICT (repo_full_name, pr_number) DO UPDATE
@@ -212,9 +287,7 @@ func upsertPendingPreview(ctx context.Context, pool *pgxpool.Pool, ref PreviewRe
 		    status = 'pending',
 		    installation_id = EXCLUDED.installation_id,
 		    updated_at = NOW()
-	`, ref.Repo, ref.PR, ref.Branch, ref.SHA, nullableInt64(ref.InstallationID))
-	return err
-}
+	`
 
 // ensureMentionStickyComment creates the "hatching" sticky comment when one
 // does not yet exist for this PR. Mirrors ensurePRComment but does not need
@@ -236,39 +309,46 @@ func ensureMentionStickyComment(ctx context.Context, pool *pgxpool.Pool, app *Ap
 	return err
 }
 
-// parseMention reports whether `body` mentions the bot, and returns the
-// requested verb (default: deploy). Matching is case-insensitive.
-func parseMention(body, botHandle string) (commentVerb, bool) {
+// parseMention recognizes an explicit command after the bot's exact handle.
+// Matching is case-insensitive.
+func parseMention(body, botHandle string) (commentVerb, string) {
 	if botHandle == "" {
-		return verbNone, false
+		return verbNone, ""
 	}
 	body = strings.ToLower(body)
 	handle := "@" + strings.ToLower(strings.TrimPrefix(botHandle, "@"))
+	command := strings.Fields(body)
+	if len(command) >= 2 && command[0] == handle && command[1] == "preview" {
+		if len(command) == 2 {
+			return verbDeploy, ""
+		}
+		if len(command) == 3 && buildCommitPattern.MatchString(command[2]) {
+			return verbDeploy, command[2]
+		}
+		return verbNone, ""
+	}
 	idx := strings.Index(body, handle)
 	if idx < 0 {
-		return verbNone, false
+		return verbNone, ""
 	}
 	// Boundary check before the @ — must be at start, or preceded by a
 	// non-word character. Avoids matching e.g. `mail@hatchpr.dev`.
 	if idx > 0 && isWordChar(body[idx-1]) {
-		return verbNone, false
+		return verbNone, ""
 	}
-	// First whitespace-delimited token after the handle is the verb (or
-	// empty if the mention is bare or trailed only by punctuation/EOL).
-	rest := strings.TrimLeft(body[idx+len(handle):], " \t\r\n")
-	verb := rest
-	if end := strings.IndexAny(rest, " \t\r\n"); end >= 0 {
-		verb = rest[:end]
+	rest := body[idx+len(handle):]
+	if len(rest) == 0 || !strings.ContainsRune(" \t\r\n", rune(rest[0])) {
+		return verbNone, ""
 	}
-	switch strings.Trim(verb, ".,!?:;`*_-") {
-	case "", "preview", "deploy", "redeploy", "rebuild":
-		return verbDeploy, true
+	words := strings.Fields(rest)
+	if len(words) == 0 {
+		return verbNone, ""
+	}
+	switch strings.Trim(words[0], ".,!?:;`*_-") {
 	case "delete", "destroy", "down", "kill", "stop":
-		return verbDestroy, true
+		return verbDestroy, ""
 	default:
-		// Mentioned but verb unknown — default to deploy. This makes
-		// "@hatchpr please" or "@hatchpr 🙏" still trigger a build.
-		return verbDeploy, true
+		return verbNone, ""
 	}
 }
 

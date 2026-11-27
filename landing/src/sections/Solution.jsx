@@ -7,16 +7,16 @@ import RevealText from '../components/RevealText.jsx'
 gsap.registerPlugin(ScrollTrigger)
 
 const steps = [
-  { icon: 'push', label: 'git push', sub: 'Tu push une branche, c\'est tout.' },
-  { icon: 'hatch', label: 'Hatch éclot', sub: 'Webhook, build, container, routing.' },
-  { icon: 'click', label: 'Tout le monde teste', sub: 'Lien live commenté sur la PR.' }
+  { icon: 'push', label: 'Request a preview', sub: 'Open a PR and comment @hatchpr preview.' },
+  { icon: 'hatch', label: 'Hatch starts the stack', sub: 'Hatch builds the image, starts the services and routes the preview.' },
+  { icon: 'click', label: 'Review the preview', sub: 'Open the link Hatch posts on the PR.' }
 ]
 
 const bullets = [
-  'Aucune installation côté reviewer',
-  'Isolation totale par PR (DB, env, URL)',
-  'Cleanup auto dès la fermeture',
-  'Sur ton serveur, tes règles'
+  'Review from the browser',
+  'A separate environment for each preview',
+  'Cleanup when the PR closes',
+  'Runs on your infrastructure'
 ]
 
 export default function Solution() {
@@ -42,11 +42,11 @@ export default function Solution() {
   }, [])
 
   return (
-    <Section id="solution" label="[02] LA SOLUTION">
+    <Section id="solution" label="[02] THE SOLUTION">
       <RevealText as="h2" className="display" style={{
         fontSize: 'clamp(36px, 6vw, 80px)', maxWidth: 1100, marginBottom: 100, fontWeight: 700
       }}>
-        Push ta branche. Hatch <span className="italic-accent" style={{ fontSize: 'inherit' }}>éclot.</span> Tout le monde teste.
+        From a PR comment to a <span className="italic-accent" style={{ fontSize: 'inherit' }}>preview link.</span>
       </RevealText>
 
       <div ref={flowRef} style={{

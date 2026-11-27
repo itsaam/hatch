@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // memFS is an in-memory FS implementation for tests.
@@ -286,6 +288,161 @@ func TestGenerateRoundTrip(t *testing.T) {
 		if !strings.Contains(out, needle) {
 			t.Errorf("output missing %q\n---\n%s", needle, out)
 		}
+	}
+}
+
+func TestGeneratePreservesComposeDockerfileAndEnv(t *testing.T) {
+	r, err := Detect(newMemFS(map[string]string{
+		"package.json": `{"dependencies":{"express":"4"}}`,
+		"compose.yaml": `services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.preview
+    ports: ["8080:80"]
+    command: ["serve"]
+    environment:
+      PATTERN: "[one,two]"
+      FRACTION: "0.125"
+      LEADING_SPACE: " value"
+`,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Manifest != "compose.yaml" {
+		t.Fatalf("manifest = %q, want compose.yaml", r.Manifest)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "startup command") {
+		t.Fatalf("warnings = %v, want Compose startup command warning", r.Warnings)
+	}
+	var config struct {
+		Services map[string]struct {
+			Dockerfile string
+			Port       int
+			Env        map[string]any
+		}
+	}
+	if err := yaml.Unmarshal([]byte(Generate(r)), &config); err != nil {
+		t.Fatal(err)
+	}
+	web := config.Services["web"]
+	if web.Dockerfile != "Dockerfile.preview" || web.Port != 80 {
+		t.Fatalf("generated service = %+v", web)
+	}
+	for key, want := range map[string]string{"PATTERN": "[one,two]", "FRACTION": "0.125", "LEADING_SPACE": " value"} {
+		if got, ok := web.Env[key].(string); !ok || got != want {
+			t.Errorf("env[%q] = %#v, want string %q", key, web.Env[key], want)
+		}
+	}
+}
+
+func TestDetectDockerfileOnlyLetsRuntimeInferPort(t *testing.T) {
+	r, err := Detect(newMemFS(map[string]string{"Dockerfile": "FROM nginx:alpine\nEXPOSE 80\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Services[0].Port != 0 || !r.Services[0].Expose {
+		t.Fatalf("Dockerfile-only service = %+v", r.Services[0])
+	}
+}
+
+func TestGenerateQuotesAmbiguousServiceNamesAndValues(t *testing.T) {
+	r := &DetectResult{
+		Services: []Service{
+			{Name: "web", Build: ".", DependsOn: []string{"null"}, Env: map[string]string{"MODE": "off", "DURATION": "1:12"}},
+			{Name: "null", Image: "postgres:16-alpine"},
+		},
+		Seed: &Seed{After: "null", SQL: "seed.sql"},
+	}
+	y := Generate(r)
+	for _, expected := range []string{
+		`  "null":`, `depends_on: ["null"]`, `after: "null"`, `MODE: "off"`, `DURATION: "1:12"`,
+	} {
+		if !strings.Contains(y, expected) {
+			t.Errorf("generated config missing %q:\n%s", expected, y)
+		}
+	}
+}
+
+func TestComposeWarnsAboutNestedContextAndRejectsInvalidDockerfile(t *testing.T) {
+	const compose = "services:\n  web:\n    build:\n      context: ./app\n      dockerfile: %s\n    ports: [\"8080:80\"]\n"
+	r, err := Detect(newMemFS(map[string]string{"compose.yaml": fmt.Sprintf(compose, "Dockerfile.preview")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "repository root") {
+		t.Fatalf("warnings = %v, want Docker build context warning", r.Warnings)
+	}
+	if _, err := Detect(newMemFS(map[string]string{"compose.yaml": fmt.Sprintf(compose, "../Dockerfile")})); err == nil {
+		t.Fatal("expected the unsupported Dockerfile path to be rejected")
+	}
+}
+
+func TestDetectNodeDoesNotSubstitutePostgresForMongo(t *testing.T) {
+	r, err := Detect(newMemFS(map[string]string{
+		"package.json": `{"dependencies":{"express":"4","mongoose":"8"}}`,
+		"Dockerfile":   "FROM node:20\n",
+		".env.example": "DATABASE_URL=mongodb://user:password@localhost:27017/app\n",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Services) != 1 || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "MongoDB") {
+		t.Fatalf("unexpected detected stack: %+v", r)
+	}
+	output := Generate(r)
+	if !strings.Contains(output, "DATABASE_URL: ${SECRET_DATABASE_URL}") || strings.Contains(output, "password") {
+		t.Fatalf("unexpected generated database URL:\n%s", output)
+	}
+}
+
+func TestLocalDatabaseURLRemainsLiteral(t *testing.T) {
+	for _, localURL := range []string{"file:./preview.db", "file:///tmp/preview.db", "file://localhost/tmp/preview.db"} {
+		if got := scrubValue("DATABASE_URL", localURL); got != localURL {
+			t.Errorf("Compose DATABASE_URL = %q, want %q", got, localURL)
+		}
+		if got := classifyEnv("DATABASE_URL", localURL).Value; got != localURL {
+			t.Errorf("example DATABASE_URL = %q, want %q", got, localURL)
+		}
+	}
+}
+
+func TestRemoteDatabaseCredentialsAreReplaced(t *testing.T) {
+	for key, source := range map[string]string{
+		"DATABASE_URL": " MYSQL://user:demo-password@db/app",
+		"MONGO_URL":    " MONGODB+SRV://user:demo-password@cluster/app",
+	} {
+		want := "${SECRET_" + key + "}"
+		if got := scrubValue(key, source); got != want {
+			t.Errorf("Compose %s = %q, want %q", key, got, want)
+		}
+		if got := classifyEnv(key, source).Value; got != want {
+			t.Errorf("example %s = %q, want %q", key, got, want)
+		}
+	}
+	if got := scrubValue("DATABASE_URL", "file://user:demo-password@remote/preview.db"); got != "${SECRET_DATABASE_URL}" {
+		t.Fatal("remote file URL should be replaced")
+	}
+}
+
+func TestPostgresURLRewritesOnlyThePassword(t *testing.T) {
+	const withoutPassword = " POSTGRESQL://db:5432/app?application_name=preview@example"
+	if got := scrubValue("DATABASE_URL", withoutPassword); got != withoutPassword {
+		t.Errorf("URL without credentials changed: %q", got)
+	}
+	const withPassword = " POSTGRESQL://user:p%40ss@db:5432/app?application_name=preview@example"
+	const expected = "postgresql://user:${DB_PASSWORD}@db:5432/app?application_name=preview@example"
+	if got := scrubValue("DATABASE_URL", withPassword); got != expected {
+		t.Errorf("masked URL = %q, want %q", got, expected)
+	}
+	const socket = "postgresql:///app?host=%2Ftmp"
+	if got := scrubValue("DATABASE_URL", socket); got != socket {
+		t.Errorf("local socket URL = %q, want %q", got, socket)
+	}
+	const queryPassword = "postgresql:///app?host=%2Ftmp&pass%77ord=demo-password"
+	if got := scrubValue("DATABASE_URL", queryPassword); got != "${SECRET_DATABASE_URL}" {
+		t.Fatal("PostgreSQL password in a query parameter should be replaced")
 	}
 }
 

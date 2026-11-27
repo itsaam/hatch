@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func signBody(secret, body []byte) string {
@@ -94,7 +96,7 @@ func TestWebhookAuthz(t *testing.T) {
 
 	// The handler passes nil pool/deployer/app. We rely on the gates
 	// returning *before* any of those are dereferenced.
-	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr")
+	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr", false)
 
 	tests := []struct {
 		name       string
@@ -153,7 +155,7 @@ func TestWebhookAuthz(t *testing.T) {
 func TestWebhookAuthz_BadSig(t *testing.T) {
 	secret := []byte("testsecret")
 	allowed := parseAllowedOwners("itsaam")
-	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr")
+	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr", false)
 
 	body := newPREvent("opened", "itsaam/hatch-demo", "itsaam/hatch-demo")
 	req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(body))
@@ -169,7 +171,7 @@ func TestWebhookAuthz_BadSig(t *testing.T) {
 func TestWebhookAuthz_WrongEvent(t *testing.T) {
 	secret := []byte("testsecret")
 	allowed := parseAllowedOwners("itsaam")
-	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr")
+	h := githubWebhookHandler(nil, secret, nil, nil, allowed, "hatchpr", false)
 
 	body := []byte(`{}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(body))
@@ -179,5 +181,94 @@ func TestWebhookAuthz_WrongEvent(t *testing.T) {
 	h(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unrelated event must 200, got %d", rec.Code)
+	}
+}
+
+func TestWebhookOwnerCommandOnly(t *testing.T) {
+	secret := []byte("testsecret")
+	h := githubWebhookHandler(nil, secret, nil, nil, parseAllowedOwners("itsaam"), "hatchpr", true)
+	for _, action := range []string{"opened", "reopened", "synchronize"} {
+		t.Run(action, func(t *testing.T) {
+			body := newPREvent(action, "itsaam/demo", "itsaam/demo")
+			resp := postWebhook(t, h, secret, body)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("%s = %d, want 200 without a deployer", action, resp.StatusCode)
+			}
+		})
+	}
+
+	body := []byte(`{
+		"action":"created","installation":{"id":123},"repository":{"full_name":"itsaam/demo"},
+		"issue":{"number":42,"pull_request":{},"user":{"login":"collaborator"}},
+		"comment":{"id":1,"body":"@hatchpr preview","user":{"login":"collaborator","type":"User"}}
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(body))
+	req.Header.Set(signatureHeader, signBody(secret, body))
+	req.Header.Set(eventHeader, "issue_comment")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusAccepted || !bytes.Contains(rec.Body.Bytes(), []byte("owner command required")) {
+		t.Fatalf("non-owner command = %d %q, want 202 owner command required", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOwnerPreviewRequiresCurrentCommit(t *testing.T) {
+	const current = "f2daa6382a9064a8c1086b5f669f113eb84cf719"
+	const previous = "a7cafdd5af8e7ccbf70b1efdb9d5f85a06bcc796"
+	for _, tc := range []struct {
+		name, command, reply string
+	}{
+		{"owner preview requires a SHA", "@hatchpr preview", "@hatchpr preview " + current},
+		{"older explicit SHA is rejected", "@hatchpr preview " + previous, "no longer the head"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replies := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/itsaam/demo/pulls/42":
+					fmt.Fprintf(w, `{"state":"open","user":{"login":"itsaam"},"head":{"sha":%q,"ref":"test","repo":{"full_name":"itsaam/demo"}}}`, current)
+				case "/repos/itsaam/demo/issues/42/comments":
+					var comment struct{ Body string }
+					if err := json.NewDecoder(r.Body).Decode(&comment); err != nil {
+						t.Error(err)
+					}
+					replies <- comment.Body
+					w.WriteHeader(http.StatusCreated)
+					io.WriteString(w, `{"id":123}`)
+				default:
+					t.Errorf("unexpected request to %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			secret := []byte("testsecret")
+			app := newTestAppClient(t)
+			app.baseURL = server.URL
+			app.tokens[123] = cachedToken{token: "test-token", expiresAt: time.Now().Add(time.Hour)}
+			h := githubWebhookHandler(nil, secret, nil, app, parseAllowedOwners("itsaam"), "hatchpr", true)
+			body := []byte(fmt.Sprintf(`{
+				"action":"created","installation":{"id":123},"repository":{"full_name":"itsaam/demo"},
+				"issue":{"number":42,"pull_request":{},"user":{"login":"itsaam"}},
+				"comment":{"id":1,"body":%q,"user":{"login":"itsaam","type":"User"}}
+			}`, tc.command))
+			req := httptest.NewRequest(http.MethodPost, "/api/github/webhook", bytes.NewReader(body))
+			req.Header.Set(signatureHeader, signBody(secret, body))
+			req.Header.Set(eventHeader, "issue_comment")
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+			}
+			select {
+			case reply := <-replies:
+				if !bytes.Contains([]byte(reply), []byte(tc.reply)) {
+					t.Fatalf("reply %q does not contain %q", reply, tc.reply)
+				}
+			default:
+				t.Fatal("expected Hatch to reply without queuing a build")
+			}
+		})
 	}
 }

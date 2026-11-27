@@ -1,0 +1,144 @@
+name: Workload images
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  api-tests:
+    name: API tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hatch
+          POSTGRES_PASSWORD: hatch-test
+          POSTGRES_DB: hatch_test
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U hatch -d hatch_test"
+          --health-interval 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache-dependency-path: core/api/go.sum
+      - name: Run Go tests with PostgreSQL
+        working-directory: core/api
+        env:
+          HATCH_TEST_DATABASE_URL: postgres://hatch:hatch-test@127.0.0.1:${{ job.services.postgres.ports[5432] }}/hatch_test?sslmode=disable
+        run: go test -race ./...
+
+  compile:
+    name: Compile ${{ matrix.workload }}
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - workload: api
+            context: ./core/api
+          - workload: landing
+            context: ./landing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: hatch-${{ matrix.workload }}:test
+      - name: Report image vulnerabilities with Trivy
+        env:
+          WORKLOAD: ${{ matrix.workload }}
+        run: |
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl --fail --silent --show-error --location \
+            --output "$tmp/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz
+          echo "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf  $tmp/trivy.tar.gz" | sha256sum --check
+          tar -xzf "$tmp/trivy.tar.gz" -C "$tmp" trivy
+          docker save --output "$tmp/image.tar" "hatch-${WORKLOAD}:test"
+          cd "$tmp"
+          ./trivy image --input image.tar --scanners vuln --exit-code 0 --timeout 5m
+      - name: Verify the BuildKit client in the API image
+        if: matrix.workload == 'api'
+        run: docker run --rm --entrypoint /usr/bin/buildctl hatch-api:test --version
+      - name: Verify the dashboard uses the configured API
+        if: matrix.workload == 'landing'
+        run: |
+          container=$(docker run -d -e HATCH_PUBLIC_API_URL=https://api.hatch.example hatch-landing:test)
+          trap 'docker rm -f "$container"' EXIT
+          for _ in $(seq 1 20); do
+            if docker exec "$container" wget -qO- http://127.0.0.1/app/ | grep -F '<meta name="hatch-api-base" content="https://api.hatch.example">'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "$container"
+          exit 1
+
+  publish:
+    name: Publish ${{ matrix.workload }}
+    if: github.event_name == 'push' && github.repository == 'itsaam/hatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - workload: api
+            context: ./core/api
+            image: ghcr.io/itsaam/hatch-api
+          - workload: landing
+            context: ./landing
+            image: ghcr.io/itsaam/hatch-landing
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.image }}
+          flavor: latest=false
+          tags: |
+            type=sha,format=long
+            type=edge
+            type=ref,event=tag
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.workload == 'landing' && format('VITE_API_URL={0}', vars.HATCH_LANDING_API_URL || 'https://api.hatchpr.dev') || '' }}

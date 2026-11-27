@@ -1,19 +1,19 @@
 import Section from '../components/Section.jsx'
 
 const cards = [
-  { vs: 'vs Vercel', t: 'Pour autre chose que Next.js', d: 'Django, .NET, Go, Rails, Docker custom — Hatch déploie tout ce qui tient dans un container.' },
-  { vs: 'vs Coolify', t: 'Focalisé sur le PR preview', d: 'Pas un PaaS complet à configurer. Juste l\'éphémère par PR, point.' },
-  { vs: 'vs un staging partagé', t: 'Une preview par PR, isolée', d: 'Plus de conflits entre features. Chaque branche a son URL, sa DB, ses env.' },
-  { vs: 'vs rien', t: 'Le designer voit le rendu', d: 'Et le PM valide pour de vrai, pas à l\'aveugle sur un titre de PR.' }
+  { vs: 'Application stack', t: 'Run the whole stack', d: 'Preview your app alongside PostgreSQL, Redis or a background worker.' },
+  { vs: 'Workflow', t: 'Start from the PR', d: 'Request a preview when reviewers need it and close the PR to remove it.' },
+  { vs: 'Data', t: 'Separate preview environments', d: 'Each preview can run its own database, services and environment variables.' },
+  { vs: 'Review', t: 'Share a link', d: 'Reviewers can see the running app without installing its stack.' }
 ]
 
 export default function Why() {
   return (
-    <Section id="why" label="[05] POURQUOI">
+    <Section id="why" label="[05] WHY HATCH">
       <h2 className="display" style={{
         fontSize: 'clamp(32px, 5vw, 56px)', maxWidth: 900, marginBottom: 60, fontWeight: 700
       }}>
-        Pas un autre PaaS. Une chose, bien faite.
+        What you can review with Hatch.
       </h2>
 
       <div style={{

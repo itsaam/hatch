@@ -40,6 +40,24 @@ var migrationRepoSecrets string
 //go:embed migrations/006_build_logs.sql
 var migrationBuildLogs string
 
+//go:embed migrations/007_kube_operations.sql
+var migrationKubeOperations string
+
+//go:embed migrations/008_kube_operation_order.sql
+var migrationKubeOperationOrder string
+
+//go:embed migrations/009_kube_pr_snapshot.sql
+var migrationKubePRSnapshot string
+
+//go:embed migrations/010_kube_github_deliveries.sql
+var migrationKubeGitHubDeliveries string
+
+//go:embed migrations/011_kube_github_delivery_time.sql
+var migrationKubeGitHubDeliveryTime string
+
+//go:embed migrations/012_kube_owner_preview_order.sql
+var migrationKubeOwnerPreviewOrder string
+
 const maxEmailLen = 254
 
 type subscribeReq struct {
@@ -60,6 +78,10 @@ func main() {
 	allowedOwners := parseAllowedOwners(mustEnv("HATCH_ALLOWED_OWNERS"))
 	if len(allowedOwners) == 0 {
 		log.Fatalf("HATCH_ALLOWED_OWNERS must list at least one owner (csv)")
+	}
+	ownerCommandOnly, err := strconv.ParseBool(getenv("HATCH_PREVIEW_OWNER_ONLY", "false"))
+	if err != nil {
+		log.Fatal("HATCH_PREVIEW_OWNER_ONLY must be a boolean")
 	}
 	hatchNetwork := getenv("HATCH_NETWORK", "hatch_public")
 	hatchDomain := getenv("HATCH_DOMAIN", "localhost")
@@ -87,7 +109,7 @@ func main() {
 	if err := waitDB(ctx, pool); err != nil {
 		log.Fatalf("db ping: %v", err)
 	}
-	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs} {
+	for _, m := range []string{migrationSubscribers, migrationPreviews, migrationPreviewsComment, migrationPreviewExpired, migrationRepoSecrets, migrationBuildLogs, migrationKubeOperations, migrationKubeOperationOrder, migrationKubePRSnapshot, migrationKubeGitHubDeliveries, migrationKubeGitHubDeliveryTime, migrationKubeOwnerPreviewOrder} {
 		if _, err := pool.Exec(ctx, m); err != nil {
 			log.Fatalf("migration: %v", err)
 		}
@@ -96,6 +118,20 @@ func main() {
 	deployer, err := NewDeployer(pool, hatchNetwork, hatchDomain, maxConcurrent)
 	if err != nil {
 		log.Fatalf("deployer init: %v", err)
+	}
+	switch runtime := getenv("HATCH_RUNTIME", "docker"); runtime {
+	case "docker":
+	case "kubernetes":
+		deployer.kube, err = newKubeRuntime()
+		if err != nil {
+			log.Fatalf("Kubernetes runtime: %v", err)
+		}
+		deployer.kubeBuilder, err = newKubeBuilder()
+		if err != nil {
+			log.Fatalf("Kubernetes builder: %v", err)
+		}
+	default:
+		log.Fatalf("unknown HATCH_RUNTIME %q", runtime)
 	}
 
 	var appClient *AppClient
@@ -117,6 +153,7 @@ func main() {
 
 	deployer.SetNotifier(&prNotifier{pool: pool, app: appClient})
 	deployer.SetAppClient(appClient)
+	deployer.previewOwnerOnly = ownerCommandOnly
 
 	reconcileCtx, reconcileCancel := context.WithTimeout(rootCtx, 30*time.Second)
 	if err := deployer.Reconcile(reconcileCtx, pool); err != nil {
@@ -127,9 +164,16 @@ func main() {
 	deployer.StartTTLReaper(rootCtx, pool,
 		time.Duration(ttlHours)*time.Hour,
 		time.Duration(reaperMinutes)*time.Minute)
+	if deployer.kube != nil {
+		deployer.startKubeWorkers(rootCtx, maxConcurrent)
+	}
 
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	clientIP, err := proxyClientIPMiddleware(os.Getenv("HATCH_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		log.Fatalf("trusted proxies: %v", err)
+	}
+	r.Use(clientIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(10 * time.Second))
 	r.Use(cors.Handler(cors.Options{
@@ -142,23 +186,32 @@ func main() {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		if rootCtx.Err() != nil || pool.Ping(ctx) != nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(httprate.LimitByIP(5, time.Minute))
+		r.Use(httprate.Limit(5, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Post("/api/subscribe", subscribeHandler(pool))
 	})
 
 	r.Group(func(r chi.Router) {
-		r.Use(httprate.LimitByIP(60, time.Minute))
+		r.Use(httprate.Limit(60, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Get("/api/subscribers/count", countHandler(pool))
 	})
 
-	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners, botHandle))
+	r.Post("/api/github/webhook", githubWebhookHandler(pool, githubSecret, deployer, appClient, allowedOwners, botHandle, ownerCommandOnly))
 
 	// Secret store — gated by HATCH_ADMIN_TOKEN (bearer). See secrets_handlers.go.
 	r.Route("/api/secrets", func(r chi.Router) {
 		r.Use(requireAdminToken)
-		r.Use(httprate.LimitByIP(30, time.Minute))
+		r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Post("/", upsertSecretHandler(pool))
 		r.Get("/", listSecretsHandler(pool))
 		r.Delete("/", deleteSecretHandler(pool))
@@ -169,7 +222,7 @@ func main() {
 	// Preview admin endpoints — gated by HATCH_ADMIN_TOKEN. See previews_handlers.go.
 	r.Route("/api/previews", func(r chi.Router) {
 		r.Use(requireAdminToken)
-		r.Use(httprate.LimitByIP(30, time.Minute))
+		r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(previewRateKey)))
 		r.Get("/", listPreviewsHandler(pool))
 		r.Get("/{owner}/{repo}/{pr}/logs", previewLogsHandler(pool, deployer))
 		r.Get("/{owner}/{repo}/{pr}/logs/stream", previewLogsStreamHandler(pool, deployer))
@@ -240,13 +293,13 @@ func subscribeHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&body); err != nil {
-			writeOK(w)
+			http.Error(w, "invalid subscription request", http.StatusBadRequest)
 			return
 		}
 
 		email := strings.ToLower(strings.TrimSpace(body.Email))
 		if !validEmail(email) {
-			writeOK(w)
+			http.Error(w, "invalid email address", http.StatusBadRequest)
 			return
 		}
 
@@ -259,6 +312,8 @@ func subscribeHandler(pool *pgxpool.Pool) http.HandlerFunc {
 		)
 		if err != nil {
 			log.Printf("insert failed: %v", err)
+			http.Error(w, "subscription unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		writeOK(w)
 	}

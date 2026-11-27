@@ -66,7 +66,8 @@ Flags:
   --dry-run         print generated YAML to stdout, don't write
   --force           overwrite an existing .hatch.yml
   --output <path>   output path (default: .hatch.yml)
-  --verbose         print detection details
+  --verbose         print detection details (stderr for dry runs)
+  --yes, -y          skip the confirmation prompt
   --no-animation    disable step delays (still colored if TTY)`)
 }
 
@@ -88,10 +89,24 @@ func runInit(argv []string) error {
 		return fmt.Errorf("get cwd: %w", err)
 	}
 
+	filesys := osFS{root: cwd}
+	if *dryRun {
+		result, err := Detect(filesys)
+		if err != nil {
+			return err
+		}
+		if *verbose {
+			reportDetection(NewUI(os.Stderr, true), filesys, result, true)
+		}
+		for _, warning := range result.Warnings {
+			fmt.Fprintln(os.Stderr, warning)
+		}
+		_, err = fmt.Fprint(os.Stdout, Generate(result))
+		return err
+	}
+
 	ui := NewUI(os.Stdout, *noAnim)
 	ui.Header()
-
-	filesys := osFS{root: cwd}
 
 	ui.Step("Scanning project…")
 
@@ -132,12 +147,6 @@ func runInit(argv []string) error {
 
 	yaml := Generate(result)
 
-	if *dryRun {
-		printSummary(ui, yaml, result, "", *dryRun)
-		ui.DryRunBlock(yaml)
-		return nil
-	}
-
 	outPath := *output
 	if !filepath.IsAbs(outPath) {
 		outPath = filepath.Join(cwd, outPath)
@@ -146,8 +155,7 @@ func runInit(argv []string) error {
 		return fmt.Errorf("%s already exists (use --force to overwrite)", outPath)
 	}
 
-	// Résumé d'abord, puis confirmation sauf si --yes.
-	printSummary(ui, yaml, result, filepath.Base(outPath), false)
+	printSummary(ui, yaml, result, filepath.Base(outPath))
 	if !*yes && !confirm(ui, "Create "+filepath.Base(outPath)+"?") {
 		fmt.Fprintln(os.Stdout)
 		fmt.Fprintln(os.Stdout, ui.Muted("Aborted. No file written."))
@@ -185,14 +193,8 @@ func confirm(ui *UI, prompt string) bool {
 }
 
 func reportDetection(ui *UI, filesys FS, r *DetectResult, verbose bool) {
-	// Found a package.json / Gemfile / etc
-	seen := map[string]bool{}
-	for _, f := range []string{"package.json", "Gemfile", "pyproject.toml", "requirements.txt", "docker-compose.yml", "docker-compose.yaml", "compose.yml"} {
-		if filesys.Exists(f) && !seen[f] {
-			ui.OK(fmt.Sprintf("Found %s (%s)", f, r.StackName))
-			seen[f] = true
-			break
-		}
+	if r.Manifest != "" {
+		ui.OK(fmt.Sprintf("Found %s (%s)", r.Manifest, r.StackName))
 	}
 	if filesys.Exists("prisma/schema.prisma") {
 		ui.OK("Found prisma/ (Prisma ORM)")
@@ -222,7 +224,7 @@ func mustCwd() string {
 	return c
 }
 
-func printSummary(ui *UI, yaml string, r *DetectResult, writtenName string, dryRun bool) {
+func printSummary(ui *UI, yaml string, r *DetectResult, writtenName string) {
 	lines := strings.Count(yaml, "\n")
 	envCount := 0
 	for _, s := range r.Services {
@@ -230,20 +232,14 @@ func printSummary(ui *UI, yaml string, r *DetectResult, writtenName string, dryR
 	}
 	head := fmt.Sprintf("%d lines · %d services · %d env vars", lines, len(r.Services), envCount)
 
-	title := ".hatch.yml generated"
-	if dryRun {
-		title = ".hatch.yml (dry-run)"
-	} else if writtenName != "" {
-		title = writtenName + " generated"
-	}
-
 	body := []string{
 		head,
 		"",
 		"Next steps:",
-		"  1. Review .hatch.yml (esp. ${SECRET_*})",
-		"  2. hatch secrets add STRIPE_SECRET_KEY",
-		"  3. git commit && git push",
+		"  1. Review the generated configuration.",
+		"  2. Add any required test secrets in the Hatch dashboard.",
+		"  3. Commit the configuration and open a pull request.",
+		"  4. Comment @hatchpr preview on its own to request a preview.",
 	}
-	ui.SummaryBox(title, body)
+	ui.SummaryBox(writtenName+" generated", body)
 }

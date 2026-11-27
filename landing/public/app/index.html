@@ -853,8 +853,8 @@ function actionStop(p) {
         render();
       }
       try {
-        await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}`, { method: 'DELETE' });
-        showToast('Preview détruite', 'success');
+        const result = await api(`/api/previews/${encodeURIComponent(p.repo_full_name.split('/')[0])}/${encodeURIComponent(p.repo_full_name.split('/')[1])}/${p.pr_number}`, { method: 'DELETE' });
+        showToast(result.queued ? 'Suppression en cours' : 'Preview détruite', 'success');
         // Sync final (au cas où d'autres previews auraient changé entre-temps).
         loadPreviews();
       } catch (e) {

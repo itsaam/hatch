@@ -31,8 +31,8 @@ type ComposeSpec struct {
 // All fields are optional; defaults live in EffectivePreviews.
 type PreviewsConfig struct {
 	// Trigger selects the auto-deploy policy for opened/reopened PRs:
-	//   "auto"    — build on every PR event (default)
-	//   "mention" — opt-in: only build after the user @-mentions the bot
+	//   "auto"    — build automatically for eligible PR events
+	//   "mention" — require @hatchpr preview (default)
 	Trigger string `yaml:"trigger,omitempty"`
 
 	// SkipWhenOnly toggles the "skip preview when only documentation changed"
@@ -219,7 +219,7 @@ func validateCompose(spec *ComposeSpec) error {
 // Always returns a non-nil pointer.
 func EffectivePreviews(spec *ComposeSpec) PreviewsConfig {
 	out := PreviewsConfig{
-		Trigger:   TriggerAuto,
+		Trigger:   TriggerMention,
 		SkipPaths: append([]string(nil), defaultSkipPaths...),
 	}
 	t := true
@@ -255,12 +255,13 @@ func FallbackCompose() *ComposeSpec {
 
 // SubstitutionContext holds the values used for ${...} substitution.
 type SubstitutionContext struct {
-	PR         int
-	SHA        string
-	Repo       string // raw "owner/repo"
-	Slug       string // sanitized slug
-	DBPassword string
-	Domain     string // e.g. "hatchpr.dev", used to derive PREVIEW_URL / PREVIEW_HOST
+	PR          int
+	SHA         string
+	Repo        string // raw "owner/repo"
+	Slug        string // sanitized slug
+	DBPassword  string
+	Domain      string // e.g. "hatchpr.dev", used to derive PREVIEW_URL / PREVIEW_HOST
+	PreviewHost string // the canonical runtime hostname, when already assigned
 	// Secrets maps secret-name -> plaintext. Referenced via ${SECRET_<NAME>}.
 	// Unknown secret names are left untouched (same policy as unknown ${VAR}).
 	Secrets map[string]string
@@ -319,16 +320,18 @@ func substituteString(s string, sctx SubstitutionContext) string {
 			return sctx.Slug
 		case "DB_PASSWORD":
 			return sctx.DBPassword
-		case "PREVIEW_HOST":
-			if sctx.Domain == "" {
+		case "PREVIEW_HOST", "PREVIEW_URL":
+			host := sctx.PreviewHost
+			if host == "" && sctx.Domain != "" {
+				host = stackHost(sctx.Slug, sctx.PR, sctx.Domain)
+			}
+			if host == "" {
 				return match
 			}
-			return fmt.Sprintf("pr-%d-%s.%s", sctx.PR, sctx.Slug, sctx.Domain)
-		case "PREVIEW_URL":
-			if sctx.Domain == "" {
-				return match
+			if name == "PREVIEW_URL" {
+				return "https://" + host
 			}
-			return fmt.Sprintf("https://pr-%d-%s.%s", sctx.PR, sctx.Slug, sctx.Domain)
+			return host
 		default:
 			return match
 		}
@@ -456,12 +459,17 @@ func fetchRepoFile(ctx context.Context, httpClient *http.Client, app *AppClient,
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSz))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("fetch %s http %d: %s", path, resp.StatusCode, truncate(string(body), 200))
 	}
 	return body, nil
 }
+
+var errInvalidCompose = errors.New("invalid .hatch.yml")
 
 // loadComposeForRef fetches `.hatch.yml` at the PR's commit. If the file is
 // absent, it returns FallbackCompose(). Parse errors are surfaced.
@@ -475,7 +483,7 @@ func loadComposeForRef(ctx context.Context, httpClient *http.Client, app *AppCli
 	}
 	spec, err := ParseCompose(data)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("%w: %w", errInvalidCompose, err)
 	}
 	return spec, true, nil
 }

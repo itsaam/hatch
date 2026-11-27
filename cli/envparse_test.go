@@ -180,7 +180,7 @@ func TestDetectStripeOnlyAddsDummyEnv(t *testing.T) {
 
 	// Generated YAML must contain the provenance comment + SECRET_ hint.
 	yaml := Generate(r)
-	if !strings.Contains(yaml, "généré depuis .env.example") {
+	if !strings.Contains(yaml, "Generated from .env.example") {
 		t.Errorf("yaml missing provenance comment\n%s", yaml)
 	}
 	if !strings.Contains(yaml, "${SECRET_STRIPE_SECRET_KEY}") {

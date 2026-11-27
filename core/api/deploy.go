@@ -48,14 +48,18 @@ type noopNotifier struct{}
 func (noopNotifier) OnStatusChange(context.Context, PreviewRef, string, string) {}
 
 type Deployer struct {
-	http       *http.Client
-	httpExt    *http.Client // external (non-Docker) HTTP client, used for GitHub raw/contents fetches
-	pool       *pgxpool.Pool
-	network    string
-	domain     string
-	notifier   StatusNotifier
-	dockerBase string // e.g. "http://docker"; tests override this.
-	app        *AppClient
+	http        *http.Client
+	httpExt     *http.Client // external (non-Docker) HTTP client, used for GitHub raw/contents fetches
+	pool        *pgxpool.Pool
+	network     string
+	domain      string
+	notifier    StatusNotifier
+	dockerBase  string // e.g. "http://docker"; tests override this.
+	app         *AppClient
+	kube        *kubeRuntime
+	kubeBuilder *kubeBuilder
+
+	previewOwnerOnly bool
 
 	// locks serializes concurrent Deploy() calls for the same (repo, pr) so
 	// two near-simultaneous webhooks (e.g. reopen + synchronize) don't race
@@ -196,12 +200,18 @@ func (d *Deployer) releaseLock(repo string, pr int) {
 // if the deployer has been shut down. Panics inside the goroutine are
 // recovered and logged so a single bad build can't take down the API.
 func (d *Deployer) DeployAsync(ref PreviewRef) bool {
+	if d.kube != nil {
+		return d.enqueueKubeOperation(ref, "deploy")
+	}
 	return d.spawn(ref, "deploy", d.Deploy)
 }
 
 // DestroyAsync is the async counterpart to Destroy. Same contract as
 // DeployAsync.
 func (d *Deployer) DestroyAsync(ref PreviewRef) bool {
+	if d.kube != nil {
+		return d.enqueueKubeOperation(ref, "close")
+	}
 	return d.spawn(ref, "destroy", d.Destroy)
 }
 
@@ -953,6 +963,9 @@ func (s *pgxStore) markExpired(ctx context.Context, repo string, pr int) error {
 // container vanished) are flipped to failed. Best-effort: each error is
 // logged and does not abort the reconciliation.
 func (d *Deployer) Reconcile(ctx context.Context, pool *pgxpool.Pool) error {
+	if d.kube != nil {
+		return d.reconcileKube(ctx)
+	}
 	return d.reconcileWithStore(ctx, &pgxStore{pool: pool})
 }
 
@@ -1202,6 +1215,12 @@ func (d *Deployer) reapOnce(ctx context.Context, store previewStore, ttl time.Du
 }
 
 func (d *Deployer) expirePreview(ctx context.Context, store previewStore, ref PreviewRef, days int) {
+	if d.kube != nil {
+		if err := d.enqueueKubeExpiry(ctx, ref, days); err != nil {
+			log.Printf("queue Kubernetes expiry %s#%d: %v", ref.Repo, ref.PR, err)
+		}
+		return
+	}
 	slug := slugify(ref.Repo)
 	if err := d.destroyStack(ctx, slug, ref.PR); err != nil {
 		log.Printf("reaper destroy stack %s#%d: %v", ref.Repo, ref.PR, err)

@@ -30,15 +30,17 @@ const (
 	commentTakenDown = "🧹 Preview taken down."
 	commentHibernate = "💤 Preview hibernated after %d days of inactivity."
 	commentSkipDocs  = "📄 Pas de preview : changements doc-only. Override avec `previews.skip_when_only: false` dans `.hatch.yml`."
-	commentMention   = "💤 Mode opt-in (`previews.trigger: mention`). Mentionne `@%s` dans un commentaire pour déclencher une preview."
+	commentMention   = "💤 Écris `@%s preview` dans un commentaire pour lancer ou mettre à jour la preview."
 )
 
 type prEvent struct {
 	Action      string `json:"action"`
 	Number      int    `json:"number"`
 	PullRequest struct {
-		HTMLURL string `json:"html_url"`
-		Head    struct {
+		HTMLURL   string    `json:"html_url"`
+		UpdatedAt time.Time `json:"updated_at"`
+		ClosedAt  time.Time `json:"closed_at"`
+		Head      struct {
 			Ref  string `json:"ref"`
 			SHA  string `json:"sha"`
 			Repo struct {
@@ -115,7 +117,7 @@ func (n *prNotifier) OnHibernated(ctx context.Context, ref PreviewRef, days int)
 	_ = ctx
 }
 
-func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string) http.HandlerFunc {
+func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer, app *AppClient, allowedOwners map[string]bool, botHandle string, ownerCommandOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 		if err != nil {
@@ -134,7 +136,7 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			return
 		}
 		if event == "issue_comment" {
-			handleIssueCommentEvent(w, r, body, pool, deployer, app, allowedOwners, botHandle)
+			handleIssueCommentEvent(w, r, body, pool, deployer, app, allowedOwners, botHandle, ownerCommandOnly)
 			return
 		}
 		if event != "pull_request" {
@@ -191,7 +193,21 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 
 		switch ev.Action {
 		case "opened", "reopened", "synchronize":
-			switch decidePullRequestTrigger(ctx, deployer.HTTPExt(), app, pool, ev, botHandle) {
+			if ownerCommandOnly {
+				writeOK(w)
+				return
+			}
+			if deployer.kube != nil {
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullChanged, ev.PullRequest.UpdatedAt); err != nil {
+					log.Printf("queue Kubernetes pull request %s#%d: %v", ref.Repo, ref.PR, err)
+					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				writeOK(w)
+				return
+			}
+
+			switch decidePullRequestTrigger(ctx, deployer.HTTPExt(), app, ev) {
 			case decisionSkipMention:
 				log.Printf("preview skip (mention mode): %s#%d", ev.Repository.FullName, ev.Number)
 				if app != nil && ev.Installation.ID != 0 && ev.Action == "opened" {
@@ -235,6 +251,23 @@ func githubWebhookHandler(pool *pgxpool.Pool, secret []byte, deployer *Deployer,
 			}
 
 		case "closed":
+			if deployer.kube != nil {
+				eventAt := ev.PullRequest.UpdatedAt
+				if ownerCommandOnly {
+					if ev.PullRequest.ClosedAt.IsZero() {
+						http.Error(w, "missing pull request closure time", http.StatusBadRequest)
+						return
+					}
+					eventAt = ev.PullRequest.ClosedAt
+				}
+				if err := deployer.storeKubeWebhook(ctx, ref, kubePullClosed, eventAt); err != nil {
+					log.Printf("queue Kubernetes pull request close %s#%d: %v", ref.Repo, ref.PR, err)
+					http.Error(w, "preview queue unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				writeOK(w)
+				return
+			}
 			if err := handlePullRequest(ctx, pool, app, ev); err != nil {
 				log.Printf("handle pull_request: %v", err)
 				http.Error(w, "internal", http.StatusInternalServerError)
@@ -263,45 +296,43 @@ const (
 )
 
 // decidePullRequestTrigger applies the .hatch.yml previews policy to the
-// incoming event. Network errors fail open (we build) — better a useless
-// build than a missed preview.
-func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, pool *pgxpool.Pool, ev prEvent, botHandle string) triggerDecision {
-	spec, _, err := loadComposeForRef(ctx, httpClient, app, ev.Installation.ID, ev.Repository.FullName, ev.PullRequest.Head.SHA)
+// incoming event. An unavailable configuration cannot authorize an automatic build.
+func decidePullRequestTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, ev prEvent) triggerDecision {
+	ref := PreviewRef{Repo: ev.Repository.FullName, PR: ev.Number, SHA: ev.PullRequest.Head.SHA, InstallationID: ev.Installation.ID}
+	decision, err := automaticPreviewTrigger(ctx, httpClient, app, ref)
 	if err != nil {
-		log.Printf("decide trigger: load compose %s#%d: %v (defaulting to build)", ev.Repository.FullName, ev.Number, err)
-		return decisionBuild
+		log.Printf("decide trigger %s#%d: %v", ref.Repo, ref.PR, err)
+	}
+	return decision
+}
+
+func automaticPreviewTrigger(ctx context.Context, httpClient *http.Client, app *AppClient, ref PreviewRef) (triggerDecision, error) {
+	spec, _, err := loadComposeForRef(ctx, httpClient, app, ref.InstallationID, ref.Repo, ref.SHA)
+	if err != nil {
+		return decisionSkipMention, err
 	}
 	cfg := EffectivePreviews(spec)
-
-	if cfg.Trigger == TriggerMention {
-		// In mention mode, the very first deploy must be initiated by an
-		// @mention. Once a preview row exists (and is not closed) we treat
-		// later synchronize events as "keep the live preview fresh".
-		if !(ev.Action == "synchronize" && previewExists(ctx, pool, ev.Repository.FullName, ev.Number)) {
-			return decisionSkipMention
-		}
-		// Fall through to docs-only check.
+	if cfg.Trigger != TriggerAuto {
+		return decisionSkipMention, nil
 	}
-
-	if cfg.SkipWhenOnly != nil && *cfg.SkipWhenOnly && app != nil && ev.Installation.ID != 0 {
-		owner, repo, ok := splitRepo(ev.Repository.FullName)
+	if cfg.SkipWhenOnly != nil && *cfg.SkipWhenOnly && app != nil && ref.InstallationID != 0 {
+		owner, repo, ok := splitRepo(ref.Repo)
 		if ok {
-			files, err := app.ListPRFiles(ctx, ev.Installation.ID, owner, repo, ev.Number)
+			files, err := app.ListPRFiles(ctx, ref.InstallationID, owner, repo, ref.PR)
 			if err != nil {
-				log.Printf("decide trigger: list pr files %s#%d: %v (defaulting to build)", ev.Repository.FullName, ev.Number, err)
-			} else if allFilesMatchSkip(files, cfg.SkipPaths) {
-				return decisionSkipDocs
+				return decisionBuild, err
+			}
+			if allFilesMatchSkip(files, cfg.SkipPaths) {
+				return decisionSkipDocs, nil
 			}
 		}
 	}
-	return decisionBuild
+	return decisionBuild, nil
 }
 
 // previewExists returns true when a preview row is already tracked for the
-// PR and not in a terminal "closed" state. Used by mention mode to decide
-// whether a synchronize should rebuild silently. Transient DB errors are
-// logged and treated as "no preview" — the worst case is a missed silent
-// rebuild that the user can re-trigger via @mention.
+// PR and not in a terminal "closed" state. Transient DB errors are logged
+// and treated as "no preview".
 func previewExists(ctx context.Context, pool *pgxpool.Pool, repo string, pr int) bool {
 	var status string
 	err := pool.QueryRow(ctx,
@@ -326,16 +357,7 @@ func handlePullRequest(ctx context.Context, pool *pgxpool.Pool, app *AppClient, 
 
 	switch ev.Action {
 	case "opened", "reopened", "synchronize":
-		_, err := pool.Exec(ctx, `
-			INSERT INTO previews (repo_full_name, pr_number, branch, commit_sha, status, installation_id)
-			VALUES ($1, $2, $3, $4, 'pending', $5)
-			ON CONFLICT (repo_full_name, pr_number) DO UPDATE
-			SET branch = EXCLUDED.branch,
-			    commit_sha = EXCLUDED.commit_sha,
-			    status = 'pending',
-			    installation_id = EXCLUDED.installation_id,
-			    updated_at = NOW()
-		`, repo, pr, branch, sha, nullableInt64(installationID))
+		_, err := pool.Exec(ctx, upsertPendingPreviewSQL, repo, pr, branch, sha, nullableInt64(installationID))
 		if err != nil {
 			return err
 		}
