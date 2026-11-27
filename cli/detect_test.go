@@ -398,12 +398,13 @@ func TestDetectNodeDoesNotSubstitutePostgresForMongo(t *testing.T) {
 }
 
 func TestLocalDatabaseURLRemainsLiteral(t *testing.T) {
-	const localURL = "file:./preview.db"
-	if got := scrubValue("DATABASE_URL", localURL); got != localURL {
-		t.Errorf("Compose DATABASE_URL = %q, want %q", got, localURL)
-	}
-	if got := classifyEnv("DATABASE_URL", localURL).Value; got != localURL {
-		t.Errorf("example DATABASE_URL = %q, want %q", got, localURL)
+	for _, localURL := range []string{"file:./preview.db", "file:///tmp/preview.db"} {
+		if got := scrubValue("DATABASE_URL", localURL); got != localURL {
+			t.Errorf("Compose DATABASE_URL = %q, want %q", got, localURL)
+		}
+		if got := classifyEnv("DATABASE_URL", localURL).Value; got != localURL {
+			t.Errorf("example DATABASE_URL = %q, want %q", got, localURL)
+		}
 	}
 }
 
@@ -419,6 +420,9 @@ func TestRemoteDatabaseCredentialsAreReplaced(t *testing.T) {
 		if got := classifyEnv(key, source).Value; got != want {
 			t.Errorf("example %s = %q, want %q", key, got, want)
 		}
+	}
+	if got := scrubValue("DATABASE_URL", "file://user:demo-password@remote/preview.db"); got != "${SECRET_DATABASE_URL}" {
+		t.Fatal("remote file URL should be replaced")
 	}
 }
 

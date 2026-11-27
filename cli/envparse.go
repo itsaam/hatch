@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -145,8 +146,8 @@ func classifyEnv(key, val string) EnvEntry {
 }
 
 func isLocalDatabaseURL(value string) bool {
-	scheme, location, ok := strings.Cut(value, ":")
-	return ok && strings.EqualFold(scheme, "file") && !strings.HasPrefix(location, "//")
+	parsed, err := url.Parse(value)
+	return err == nil && strings.EqualFold(parsed.Scheme, "file") && parsed.Host == "" && parsed.User == nil
 }
 
 func databaseSecretEntry(key string) EnvEntry {
