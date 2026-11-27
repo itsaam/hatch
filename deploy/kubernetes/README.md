@@ -20,6 +20,9 @@ BuildKit separately for concurrent builds.
    Ingress hosts and TLS reference. Set both Ingress class settings to the class
    installed in the cluster. Point the landing host, API host and wildcard
    preview DNS record (for example, `*.hatch.example.org`) to your ingress.
+   Set `HATCH_TRUSTED_PROXY_CIDRS` to the comma-separated networks of trusted
+   proxies that sanitize or append `X-Forwarded-For`. Without it the API limits
+   requests by the immediate connection address, which can be shared behind an ingress.
 2. Use a cluster with Pod Security Admission, a NetworkPolicy-capable CNI, an
    ingress controller and a default dynamic StorageClass. To select a different
    StorageClass or size, patch the PostgreSQL claim template before the first
@@ -71,6 +74,14 @@ the tunnel terminates public TLS and the in-cluster leg uses HTTP, remove the
 system Ingress TLS block and leave `HATCH_KUBE_TLS_SECRET` empty, then configure
 the cluster ingress HTTP entrypoint accordingly. Confirm wildcard DNS and edge
 certificate coverage before using a test hostname. See [Cloudflare Tunnel routing](https://developers.cloudflare.com/tunnel/concepts/routing/).
+
+The [Sunny overlay](overlays/sunny/) uses `hatchpr.dev` and `api.hatchpr.dev`
+with the `traefik-kubernetes` ingress class. It expects HTTPS at Cloudflare and
+HTTP from the connector to Traefik; route `www.hatchpr.dev` to the canonical site
+with a redirect at the edge. Before syncing, set the real builder address and
+server name through `hatch-api-env`, configure the registry credentials, and
+pin the published images by digest in the GitOps configuration. Check the
+webhook, public TLS and preview lifecycle before moving the production DNS.
 
 ## Provision credentials
 
