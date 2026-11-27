@@ -32,8 +32,9 @@ var envStableSecretKeys = map[string]bool{
 var envBoolPattern = regexp.MustCompile(`^(?i)(true|false)$`)
 
 // envPGURLPattern matches a postgres URL so we can rewrite host/password.
-var envPGURL = regexp.MustCompile(`^postgres(?:ql)?://`)
-var envOtherDBURL = regexp.MustCompile(`^(?:mysql|mongodb(?:\+srv)?)://`)
+var envPGURL = regexp.MustCompile(`(?i)^postgres(?:ql)?://`)
+var envOtherDBURL = regexp.MustCompile(`(?i)^(?:mysql|mongodb(?:\+srv)?)://`)
+var previewVariable = regexp.MustCompile(`^\$\{[A-Z_][A-Z0-9_]*\}$`)
 
 const previewPostgresURL = "postgresql://app:${DB_PASSWORD}@db:5432/app?schema=public"
 
@@ -83,14 +84,15 @@ func stripQuotes(v string) string {
 // classifyEnv turns a raw (KEY, VAL) pair into a preview-ready entry.
 func classifyEnv(key, val string) EnvEntry {
 	upper := strings.ToUpper(key)
+	databaseURL := strings.TrimSpace(val)
 
-	if envPGURL.MatchString(val) || (upper == "DATABASE_URL" && val == "") {
+	if envPGURL.MatchString(databaseURL) || (upper == "DATABASE_URL" && databaseURL == "") {
 		return EnvEntry{Key: key, Value: previewPostgresURL}
 	}
-	if upper == "DATABASE_URL" && strings.HasPrefix(val, "file:") {
+	if upper == "DATABASE_URL" && isLocalDatabaseURL(databaseURL) {
 		return EnvEntry{Key: key, Value: val}
 	}
-	if upper == "DATABASE_URL" || envOtherDBURL.MatchString(val) {
+	if upper == "DATABASE_URL" || envOtherDBURL.MatchString(databaseURL) {
 		return databaseSecretEntry(key)
 	}
 
@@ -140,6 +142,11 @@ func classifyEnv(key, val string) EnvEntry {
 	}
 
 	return EnvEntry{Key: key, Value: val}
+}
+
+func isLocalDatabaseURL(value string) bool {
+	scheme, location, ok := strings.Cut(value, ":")
+	return ok && strings.EqualFold(scheme, "file") && !strings.HasPrefix(location, "//")
 }
 
 func databaseSecretEntry(key string) EnvEntry {

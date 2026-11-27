@@ -196,7 +196,12 @@ func normalizeEnv(raw interface{}) map[string]string {
 // 1. secret-looking keys get value replaced by ${SECRET_<NAME>}
 // 2. postgres URLs get their password replaced by ${DB_PASSWORD}
 func scrubValue(key, value string) string {
-	if envOtherDBURL.MatchString(value) {
+	databaseURL := strings.TrimSpace(value)
+	if strings.EqualFold(key, "DATABASE_URL") && isLocalDatabaseURL(databaseURL) {
+		return value
+	}
+	if envOtherDBURL.MatchString(databaseURL) ||
+		(strings.EqualFold(key, "DATABASE_URL") && !envPGURL.MatchString(databaseURL) && !previewVariable.MatchString(databaseURL)) {
 		return databaseSecretEntry(key).Value
 	}
 	if sensitiveKeyRe.MatchString(key) {
@@ -208,10 +213,10 @@ func scrubValue(key, value string) string {
 	return rewritePostgresURL(value)
 }
 
-var pgURLRe = regexp.MustCompile(`^(postgres(?:ql)?://[^:]+:)([^@]+)(@.+)$`)
+var pgURLRe = regexp.MustCompile(`(?i)^(postgres(?:ql)?://[^:]+:)([^@]+)(@.+)$`)
 
 func rewritePostgresURL(v string) string {
-	if m := pgURLRe.FindStringSubmatch(v); len(m) == 4 {
+	if m := pgURLRe.FindStringSubmatch(strings.TrimSpace(v)); len(m) == 4 {
 		return m[1] + "${DB_PASSWORD}" + m[3]
 	}
 	return v

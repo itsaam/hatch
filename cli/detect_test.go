@@ -407,6 +407,21 @@ func TestLocalDatabaseURLRemainsLiteral(t *testing.T) {
 	}
 }
 
+func TestRemoteDatabaseCredentialsAreReplaced(t *testing.T) {
+	for key, source := range map[string]string{
+		"DATABASE_URL": " MYSQL://user:demo-password@db/app",
+		"MONGO_URL":    " MONGODB+SRV://user:demo-password@cluster/app",
+	} {
+		want := "${SECRET_" + key + "}"
+		if got := scrubValue(key, source); got != want {
+			t.Errorf("Compose %s = %q, want %q", key, got, want)
+		}
+		if got := classifyEnv(key, source).Value; got != want {
+			t.Errorf("example %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
