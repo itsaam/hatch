@@ -104,6 +104,7 @@ func detectInner(fs FS) (*DetectResult, error) {
 		return &DetectResult{
 			StackName: "Dockerfile (stateless)",
 			Manifest:  "Dockerfile",
+			Warnings:  []string{"Set web.port if the Dockerfile does not expose the application's listening port."},
 			Services: []Service{
 				{
 					Name:   "web",
@@ -682,11 +683,13 @@ func applyEnvExample(fs FS, r *DetectResult) {
 	port := r.Services[mainIdx].Port
 
 	// Ensure Redis service exists if we parsed a REDIS_URL and no redis service yet.
-	hasRedisSvc := false
+	hasRedisSvc, hasPostgresSvc := false, false
 	for _, s := range r.Services {
 		if s.Name == "redis" {
 			hasRedisSvc = true
-			break
+		}
+		if s.Name == "db" && strings.HasPrefix(s.Image, "postgres:") {
+			hasPostgresSvc = true
 		}
 	}
 	needsRedis := false
@@ -712,7 +715,12 @@ func applyEnvExample(fs FS, r *DetectResult) {
 	if main.Env == nil {
 		main.Env = map[string]string{}
 	}
-	for _, e := range entries {
+	for i := range entries {
+		e := entries[i]
+		if e.Value == previewPostgresURL && !hasPostgresSvc {
+			e = databaseSecretEntry(e.Key)
+			entries[i] = e
+		}
 		v := e.Value
 		if strings.EqualFold(e.Key, "PORT") && port > 0 {
 			v = fmt.Sprintf("%d", port)

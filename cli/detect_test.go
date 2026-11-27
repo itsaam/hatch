@@ -383,12 +383,17 @@ func TestDetectNodeDoesNotSubstitutePostgresForMongo(t *testing.T) {
 	r, err := Detect(newMemFS(map[string]string{
 		"package.json": `{"dependencies":{"express":"4","mongoose":"8"}}`,
 		"Dockerfile":   "FROM node:20\n",
+		".env.example": "DATABASE_URL=mongodb://user:password@localhost:27017/app\n",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(r.Services) != 1 || len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "MongoDB") {
 		t.Fatalf("unexpected detected stack: %+v", r)
+	}
+	output := Generate(r)
+	if !strings.Contains(output, "DATABASE_URL: ${SECRET_DATABASE_URL}") || strings.Contains(output, "password") {
+		t.Fatalf("unexpected generated database URL:\n%s", output)
 	}
 }
 

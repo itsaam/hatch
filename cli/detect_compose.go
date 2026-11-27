@@ -196,6 +196,9 @@ func normalizeEnv(raw interface{}) map[string]string {
 // 1. secret-looking keys get value replaced by ${SECRET_<NAME>}
 // 2. postgres URLs get their password replaced by ${DB_PASSWORD}
 func scrubValue(key, value string) string {
+	if envOtherDBURL.MatchString(value) || (strings.EqualFold(key, "DATABASE_URL") && !envPGURL.MatchString(value) && !strings.HasPrefix(strings.TrimSpace(value), "${")) {
+		return databaseSecretEntry(key).Value
+	}
 	if sensitiveKeyRe.MatchString(key) {
 		// Leave ${...} interpolations alone, otherwise replace.
 		if !strings.HasPrefix(strings.TrimSpace(value), "${") {
