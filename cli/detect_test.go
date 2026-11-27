@@ -426,6 +426,18 @@ func TestRemoteDatabaseCredentialsAreReplaced(t *testing.T) {
 	}
 }
 
+func TestPostgresURLRewritesOnlyThePassword(t *testing.T) {
+	const withoutPassword = " POSTGRESQL://db:5432/app?application_name=preview@example"
+	if got := scrubValue("DATABASE_URL", withoutPassword); got != withoutPassword {
+		t.Errorf("URL without credentials changed: %q", got)
+	}
+	const withPassword = " POSTGRESQL://user:p%40ss@db:5432/app?application_name=preview@example"
+	const expected = "postgresql://user:${DB_PASSWORD}@db:5432/app?application_name=preview@example"
+	if got := scrubValue("DATABASE_URL", withPassword); got != expected {
+		t.Errorf("masked URL = %q, want %q", got, expected)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

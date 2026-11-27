@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -210,16 +211,20 @@ func scrubValue(key, value string) string {
 			return "${SECRET_" + strings.ToUpper(key) + "}"
 		}
 	}
-	return rewritePostgresURL(value)
-}
-
-var pgURLRe = regexp.MustCompile(`(?i)^(postgres(?:ql)?://[^:]+:)([^@]+)(@.+)$`)
-
-func rewritePostgresURL(v string) string {
-	if m := pgURLRe.FindStringSubmatch(strings.TrimSpace(v)); len(m) == 4 {
-		return m[1] + "${DB_PASSWORD}" + m[3]
+	if !envPGURL.MatchString(databaseURL) {
+		return value
 	}
-	return v
+	parsed, err := url.Parse(databaseURL)
+	if err != nil || parsed.Host == "" {
+		return databaseSecretEntry(key).Value
+	}
+	if _, hasPassword := parsed.User.Password(); !hasPassword {
+		return value
+	}
+	username := url.User(parsed.User.Username()).String()
+	parsed.User = nil
+	prefix := parsed.Scheme + "://"
+	return prefix + username + ":${DB_PASSWORD}@" + strings.TrimPrefix(parsed.String(), prefix)
 }
 
 func normalizeDependsOn(raw interface{}) []string {
