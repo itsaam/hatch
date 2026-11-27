@@ -147,7 +147,8 @@ func classifyEnv(key, val string) EnvEntry {
 
 func isLocalDatabaseURL(value string) bool {
 	parsed, err := url.Parse(value)
-	return err == nil && strings.EqualFold(parsed.Scheme, "file") && parsed.Host == "" && parsed.User == nil
+	return err == nil && strings.EqualFold(parsed.Scheme, "file") && parsed.User == nil &&
+		(parsed.Host == "" || strings.EqualFold(parsed.Host, "localhost"))
 }
 
 func databaseSecretEntry(key string) EnvEntry {

@@ -398,7 +398,7 @@ func TestDetectNodeDoesNotSubstitutePostgresForMongo(t *testing.T) {
 }
 
 func TestLocalDatabaseURLRemainsLiteral(t *testing.T) {
-	for _, localURL := range []string{"file:./preview.db", "file:///tmp/preview.db"} {
+	for _, localURL := range []string{"file:./preview.db", "file:///tmp/preview.db", "file://localhost/tmp/preview.db"} {
 		if got := scrubValue("DATABASE_URL", localURL); got != localURL {
 			t.Errorf("Compose DATABASE_URL = %q, want %q", got, localURL)
 		}
@@ -435,6 +435,14 @@ func TestPostgresURLRewritesOnlyThePassword(t *testing.T) {
 	const expected = "postgresql://user:${DB_PASSWORD}@db:5432/app?application_name=preview@example"
 	if got := scrubValue("DATABASE_URL", withPassword); got != expected {
 		t.Errorf("masked URL = %q, want %q", got, expected)
+	}
+	const socket = "postgresql:///app?host=%2Ftmp"
+	if got := scrubValue("DATABASE_URL", socket); got != socket {
+		t.Errorf("local socket URL = %q, want %q", got, socket)
+	}
+	const queryPassword = "postgresql:///app?host=%2Ftmp&pass%77ord=demo-password"
+	if got := scrubValue("DATABASE_URL", queryPassword); got != "${SECRET_DATABASE_URL}" {
+		t.Fatal("PostgreSQL password in a query parameter should be replaced")
 	}
 }
 

@@ -215,11 +215,23 @@ func scrubValue(key, value string) string {
 		return value
 	}
 	parsed, err := url.Parse(databaseURL)
-	if err != nil || parsed.Host == "" {
+	if err != nil {
 		return databaseSecretEntry(key).Value
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return databaseSecretEntry(key).Value
+	}
+	for parameter := range query {
+		if strings.EqualFold(parameter, "password") || strings.EqualFold(parameter, "sslpassword") {
+			return databaseSecretEntry(key).Value
+		}
 	}
 	if _, hasPassword := parsed.User.Password(); !hasPassword {
 		return value
+	}
+	if parsed.Host == "" {
+		return databaseSecretEntry(key).Value
 	}
 	username := url.User(parsed.User.Username()).String()
 	parsed.User = nil
